@@ -273,8 +273,13 @@ def atomic_json(path: Path, value: dict) -> None:
         tmp.unlink(missing_ok=True)
 
 
+class OperationBusy(RuntimeError):
+    """The browser is occupied, not an authentication or attendance failure."""
+
+
 @contextmanager
-def execution_lock(name: str = "execution"):
+def execution_lock(name: str = "execution", *, timeout: float = 0, label: str = "",
+                   on_wait=None, cancel=None):
     """An OS lock serializes GUI, scheduled runs and profile access."""
     import msvcrt
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -284,13 +289,38 @@ def execution_lock(name: str = "execution"):
             handle.write(b"0")
             handle.flush()
         handle.seek(0)
+        deadline = time.monotonic() + timeout
+        announced = False
+        owner_path = DATA_DIR / (name + ".owner.json")
+        while True:
+            if cancel is not None and cancel.is_set():
+                from dooray_auth import check_cancel
+                check_cancel(cancel)
+            try:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError as exc:
+                try:
+                    owner = json.loads(owner_path.read_text(encoding="utf-8")).get("label") or "다른 두레이 작업"
+                except (OSError, ValueError):
+                    owner = "다른 두레이 작업"
+                if time.monotonic() >= deadline:
+                    raise OperationBusy(f"{owner} 진행 중으로 대기 시간이 끝났습니다. 잠시 후 다시 실행하세요.") from exc
+                if not announced:
+                    (on_wait or log.info)(f"{owner} 진행 중 · 완료되면 자동으로 시작합니다 (최대 {timeout:g}초 대기).")
+                    announced = True
+                time.sleep(.1)
         try:
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        except OSError as exc:
-            raise RuntimeError("다른 출퇴근 작업이 실행 중입니다. 잠시 후 다시 시도하세요.") from exc
-        try:
+            atomic_json(owner_path, {"pid": os.getpid(), "label": label or "두레이 작업",
+                                     "started_at": rules.now_kst().isoformat()})
             yield
         finally:
+            # Keep release independent of metadata cleanup errors.
+            try:
+                owner_path.unlink(missing_ok=True)
+            except OSError:
+                pass
             handle.seek(0)
             msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 

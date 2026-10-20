@@ -56,7 +56,7 @@ class App:
         self.selected = self.today
         self.month = self.today.replace(day=1)
         self.overrides = copy.deepcopy(self.cfg["date_overrides"])
-        root.title(TITLE + "  ·  2.1.1")
+        root.title(TITLE + "  ·  2.1.2")
         root.geometry("1380x920")
         root.minsize(1180, 800)
         root.configure(bg=BG)
@@ -88,7 +88,7 @@ class App:
                                cursor="hand2", command=lambda k=key: self.show(k))
             button.pack(fill="x", padx=10, pady=3)
             self.nav_buttons[key] = button
-        tk.Label(side, text="개인 자동화 도구\n버전 2.1.1 · 한국 시간", justify="left", bg=NAV, fg=MUTED, font=("Malgun Gothic", 9)).pack(side="bottom", anchor="w", padx=25, pady=25)
+        tk.Label(side, text="개인 자동화 도구\n버전 2.1.2 · 한국 시간", justify="left", bg=NAV, fg=MUTED, font=("Malgun Gothic", 9)).pack(side="bottom", anchor="w", padx=25, pady=25)
         main = tk.Frame(root, bg=BG)
         main.pack(side="left", fill="both", expand=True)
         header = tk.Frame(main, bg=CARD, height=66)
@@ -229,8 +229,10 @@ class App:
         row.pack(fill="x")
         for action in rules.ACTIONS:
             self.button(row, "지금 " + rules.LABELS[action], lambda a=action: self.run_action(a)).pack(side="left", padx=(0, 8))
-            self.button(row, rules.LABELS[action] + " 테스트", lambda a=action: self.run_action(a, dry=True)).pack(side="left", padx=(0, 15))
-        self.label(manual, "테스트는 출퇴근 버튼을 클릭하지 않습니다. 수동 실행은 날짜별 OFF를 무시합니다.", color=MUTED, size=9).pack(anchor="w", pady=(12, 0))
+            self.button(row, rules.LABELS[action] + " 점검 (기록 없음)", lambda a=action: self.run_action(a, dry=True)).pack(side="left", padx=(0, 15))
+        self.label(manual, "점검은 로그인과 버튼 상태만 확인합니다. 실제 기록하려면 ‘지금 출근 / 지금 퇴근’을 누르세요.\n수동 실행은 확인창을 거쳐 처리하며 날짜별 OFF를 무시합니다.", color=MUTED, size=9, justify="left").pack(anchor="w", pady=(12, 0))
+        self.action_status = self.label(manual, "", color=MUTED, size=10, justify="left", wraplength=820)
+        self.action_status.pack(anchor="w", pady=(8, 0))
         self.home_sync = self.label(page, "", color=MUTED, anchor="w", justify="left", wraplength=850)
         self.home_sync.pack(anchor="w", pady=18)
 
@@ -571,16 +573,28 @@ class App:
         self.save(after=start)
 
     def run_action(self, action, dry=False):
+        if self.account_dirty():
+            self.show("settings")
+            self.connection_status.configure(text="계정 변경 후 저장하고 연결 확인을 먼저 누르세요.", fg="#B25545")
+            return
         if not dry and not messagebox.askyesno(TITLE, f"지금 실제 {rules.LABELS[action]} 처리할까요?\n오늘의 휴일/휴가 및 날짜별 OFF 설정을 무시합니다.", parent=self.root):
             return
         cfg = copy.deepcopy(self.cfg)
         args = types.SimpleNamespace(action=action, dry_run=dry, inspect=False, inspect_login=False,
-                                     headed=not cfg["headless"], force=True, scheduled=False)
+                                     headed=not cfg["headless"], force=True, scheduled=False,
+                                     progress=lambda message: self.events.put(("action_progress", message)))
         def run():
             if core.do_run(cfg, args):
-                raise RuntimeError("실행에 실패했습니다. 실행 기록에서 원인을 확인하세요.")
-        self.show("logs")
-        self.background(rules.LABELS[action] + (" 테스트" if dry else " 수동 실행"), run)
+                raise RuntimeError(getattr(args, "error", "실행에 실패했습니다. 실행 기록을 확인하세요."))
+            return getattr(args, "result", "확인 완료")
+        def done(result):
+            text = (rules.LABELS[action] + " 점검 완료 · 새 출퇴근 기록을 생성하지 않았습니다.\n" + result) if dry else result
+            self.action_status.configure(text=text, fg=ACCENT)
+            messagebox.showinfo(TITLE, text, parent=self.root)
+        self.show("home")
+        self.action_status.configure(text="다른 작업이 진행 중이면 완료될 때까지 기다립니다.", fg=MUTED)
+        self.background(rules.LABELS[action] + (" 점검 (기록 없음)" if dry else " 수동 실행"), run, done,
+                        failed=lambda error: self.action_status.configure(text=error, fg="#B25545"))
 
     def sync(self, quiet=False):
         if self.busy:
@@ -723,11 +737,19 @@ class App:
 
     def refresh_summary(self):
         today = rules.now_kst().date()
+        state = core.load_state()
         self.date_label.configure(text=f"{today:%Y년 %m월 %d일} {'월화수목금토일'[today.weekday()]}요일  ·  Asia/Seoul")
         for action, (value, detail) in self.summary.items():
             plan = rules.plan_action(self.cfg, today, action, self.cache)
             value.configure(text=rules.clock_text(plan.target) if plan.enabled else "OFF", fg=ACCENT if plan.enabled else MUTED)
-            detail.configure(text=(plan.description + "\n" if plan.enabled else "") + plan.reason)
+            text = (plan.description + "\n" if plan.enabled else "") + plan.reason
+            if state.get("last_" + action + "_date") == today.isoformat():
+                text += "\n오늘 " + rules.LABELS[action] + " 처리 확인됨"
+            elif state.get("last_" + action + "_error") and state.get(
+                    "last_" + action + "_error_at", state.get("last_error_at", "")).startswith(today.isoformat()):
+                text += "\n최근 시도 실패: " + state["last_" + action + "_error"].splitlines()[0]
+                text += "\n점검으로 현재 두레이 기록을 확인하세요."
+            detail.configure(text=text)
         if self.cache.get("error"):
             sync = "근태 동기화 실패 · " + self.cache["error"]
         elif self.cache.get("synced_at"):
@@ -796,6 +818,10 @@ class App:
                     self.apply_status(value)
                 elif kind == "connection":
                     self.connection_status.configure(text=value, fg=ACCENT)
+                elif kind == "action_progress":
+                    self.action_status.configure(text=value, fg=MUTED)
+                    self.feedback.configure(text=value, fg=MUTED)
+                    self.events.put(("log", value))
                 elif kind == "done":
                     done, result, error, label = value
                     self.busy = False

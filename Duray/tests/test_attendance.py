@@ -288,6 +288,85 @@ class RuntimeTest(unittest.TestCase):
                 with core.execution_lock():
                     pass
 
+    def test_lock_waits_for_owner_and_reports_what_is_running(self):
+        import threading
+        entered, release = threading.Event(), threading.Event()
+        def holder():
+            with core.execution_lock(label="근태 달력 조회"):
+                entered.set()
+                release.wait(3)
+        thread = threading.Thread(target=holder)
+        thread.start()
+        self.assertTrue(entered.wait(2))
+        messages = []
+        try:
+            def waiting(message):
+                messages.append(message)
+                release.set()
+            with core.execution_lock(timeout=2, label="퇴근 점검", on_wait=waiting):
+                pass
+        finally:
+            release.set()
+            thread.join(3)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("근태 달력 조회", messages[0])
+        self.assertIn("자동으로 시작", messages[0])
+
+    def test_notification_is_outside_browser_lock_and_not_repeated(self):
+        self.cfg["notify_on_failure"] = True
+        def notification(message):
+            with core.execution_lock():
+                pass
+        with patch.object(core, "chromium_ready", return_value=True), \
+                patch.object(runtime, "run_once", side_effect=RuntimeError("fixture failure")), \
+                patch.object(core, "notify_failure", side_effect=notification) as notify:
+            self.assertEqual(runtime.do_run(self.cfg, self.args), 1)
+            self.assertEqual(runtime.do_run(self.cfg, self.args), 1)
+            notify.assert_called_once()
+
+    def test_retry_sleep_is_outside_browser_lock(self):
+        self.cfg.update(retry_count=2, retry_delay_seconds=1)
+        def sleep(delay):
+            with core.execution_lock():
+                pass
+        with patch.object(core, "chromium_ready", return_value=True), \
+                patch.object(runtime, "run_once", side_effect=[RuntimeError("retry"), "출근 체크 성공"]), \
+                patch.object(runtime.time, "sleep", side_effect=sleep) as wait:
+            self.assertEqual(runtime.do_run(self.cfg, self.args), 0)
+            wait.assert_called_once_with(1)
+
+    def test_waiting_second_request_rechecks_duplicate_before_click(self):
+        import threading
+        import time
+        entered = threading.Event()
+        def run(*args, **kwargs):
+            entered.set()
+            time.sleep(.15)
+            return "출근 체크 성공"
+        with patch.object(core, "chromium_ready", return_value=True), patch.object(runtime, "run_once", side_effect=run) as browser:
+            results = []
+            thread = threading.Thread(target=lambda: results.append(runtime.do_run(self.cfg, copy.copy(self.args))))
+            thread.start()
+            self.assertTrue(entered.wait(2))
+            results.append(runtime.do_run(self.cfg, copy.copy(self.args)))
+            thread.join(3)
+            self.assertEqual(results, [0, 0])
+            browser.assert_called_once()
+
+    def test_sync_delay_does_not_discard_reservation_accepted_within_grace(self):
+        self.cfg.update(dooray_sync_enabled=True, late_grace_minutes=0)
+        fresh = {"identity": rules.cache_identity(self.cfg), "synced_at": (self.now + dt.timedelta(seconds=20)).isoformat(),
+                 "days": {self.now.date().isoformat(): {"kind": "work", "label": "근무일"}}}
+        clock = [self.now]
+        def sync(cfg):
+            clock[0] += dt.timedelta(seconds=20)
+            return fresh
+        with patch.object(rules, "now_kst", side_effect=lambda: clock[0]), \
+                patch.object(runtime, "sync_calendar", side_effect=sync), \
+                patch.object(runtime, "do_run", return_value=0) as run:
+            self.assertEqual(runtime.tick(self.cfg), ["checkin"])
+            self.assertEqual(run.call_args.args[1].requested_at, self.now)
+
     def test_atomic_config_preserves_unicode(self):
         self.cfg["date_overrides"]["2026-10-20"] = {"note": "대체휴무"}
         core.save_config(self.cfg)

@@ -18,7 +18,7 @@ def check_connection(cfg: dict, *, manual=False, progress=None, cancel=None):
         raise auth.ConnectionProblem("BROWSER", "Chromium이 설치되지 않았습니다.",
                                      "연결 · 설정 아래의 Chromium 설치를 누른 뒤 다시 확인하세요.")
     try:
-        with core.execution_lock():
+        with core.execution_lock(timeout=120, label="로그인 연결 확인", on_wait=progress, cancel=cancel):
             return run_once(cfg, dry_run=True, headed=manual, inspect=False,
                             connection_only=True, manual_login=manual, progress=progress, cancel=cancel)
     except Exception as exc:
@@ -55,7 +55,7 @@ def sync_page(page, cfg: dict, reader=None, cancel=None) -> dict:
 
 
 def sync_calendar(cfg: dict, *, headed: bool = False) -> dict:
-    with core.execution_lock():
+    with core.execution_lock(timeout=120, label="근태 달력 조회"):
         try:
             return run_once(cfg, dry_run=True, headed=headed, inspect=False, sync_only=True)
         except Exception as exc:
@@ -87,7 +87,7 @@ def due(cfg: dict, now: dt.datetime, action: str, cache: dict) -> tuple[bool, st
 def run_once(cfg: dict, *, dry_run: bool, headed: bool, inspect: bool,
              inspect_login: bool = False, action: str = "checkin", force: bool = False,
              scheduled: bool = False, sync_only: bool = False, connection_only: bool = False,
-             manual_login: bool = False, progress=None, cancel=None):
+             manual_login: bool = False, progress=None, cancel=None, requested_at=None):
     from playwright.sync_api import sync_playwright
     if action not in rules.ACTIONS:
         raise ValueError("알 수 없는 출퇴근 동작")
@@ -99,7 +99,7 @@ def run_once(cfg: dict, *, dry_run: bool, headed: bool, inspect: bool,
         auth.check_blocked(cfg)
     profile.mkdir(parents=True, exist_ok=True)
     emit = progress or (lambda message: core.log.info("%s", message))
-    started_at = rules.now_kst()
+    started_at = requested_at or rules.now_kst()
     started_day = started_at.date()
     with sync_playwright() as pw:
         ctx = pw.chromium.launch_persistent_context(
@@ -241,56 +241,76 @@ def run_once(cfg: dict, *, dry_run: bool, headed: bool, inspect: bool,
 
 def do_run(cfg: dict, args) -> int:
     try:
-        with core.execution_lock():
-            return _do_run(cfg, args)
+        return _do_run(cfg, args)
     except Exception as exc:
+        args.error = str(exc)
         core.log.error("실행 실패: %s", exc)
         return 1
+
+
+def _attempt(cfg, args, action, probing, requested_at):
+    scheduled = getattr(args, "scheduled", False)
+    title = rules.LABELS[action]
+    with core.execution_lock(timeout=getattr(args, "lock_timeout", 240 if scheduled else 120),
+                             label=title + (" 기록 없는 점검" if probing else " 처리"),
+                             on_wait=getattr(args, "progress", None)):
+        if rules.now_kst().date() != requested_at.date():
+            raise RuntimeError("대기 중 날짜가 변경되어 실행을 중단했습니다.")
+        if scheduled:
+            cfg = core.load_config()
+        state = core.load_state()
+        # Recheck after acquiring the lock: another waiter may have completed it.
+        if not probing and state.get("last_" + action + "_date") == requested_at.date().isoformat():
+            return f"이미 {title} 체크됨"
+        if not args.force and not probing:
+            cache = core.load_calendar(cfg)
+            plan = rules.plan_action(cfg, requested_at.date(), action, cache)
+            refresh_required = (needs_remote(cfg, requested_at.date(), action) and
+                                not rules.cache_fresh(cache, cfg, rules.now_kst()) and
+                                rules.plan_action(cfg, requested_at.date(), action, {}).enabled)
+            if not plan.enabled and not refresh_required:
+                return "건너뜀: " + plan.reason
+        if not core.chromium_ready():
+            raise RuntimeError("Chromium이 없습니다. 설정 > Chromium 설치를 실행하세요.")
+        result = run_once(cfg, dry_run=args.dry_run, headed=args.headed, inspect=args.inspect,
+                          inspect_login=args.inspect_login, action=action, force=args.force,
+                          scheduled=scheduled, requested_at=requested_at)
+        if not probing and result in (f"{title} 체크 성공", f"이미 {title} 체크됨"):
+            state = core.load_state()
+            state["last_" + action + "_date"] = requested_at.date().isoformat()
+            state["last_" + action + "_result"] = result
+            state.pop("last_" + action + "_error", None)
+            state.pop("last_" + action + "_error_at", None)
+            state["last_result"] = result
+            state["last_run_at"] = rules.now_kst().isoformat(timespec="seconds")
+            state.setdefault("history", []).append({"date": requested_at.date().isoformat(), "action": action,
+                                                    "at": state["last_run_at"], "result": result})
+            state["history"] = state["history"][-180:]
+            core.save_state(state)
+        return result
 
 
 def _do_run(cfg: dict, args) -> int:
     rules.validate_config(cfg, require_account=True)
     action = getattr(args, "action", "checkin")
     title = rules.LABELS[action]
-    today = rules.now_kst().date()
+    requested_at = getattr(args, "requested_at", None) or rules.now_kst()
+    today = requested_at.date()
     probing = args.dry_run or args.inspect or args.inspect_login
-    state = core.load_state()
-    # Manual actions still respect duplicate protection.
-    if not probing and state.get("last_" + action + "_date") == today.isoformat():
-        core.log.info("오늘 %s 기록이 이미 있습니다.", title)
-        return 0
-    if not args.force and not probing:
-        cache = core.load_calendar(cfg)
-        plan = rules.plan_action(cfg, today, action, cache)
-        refresh_required = (needs_remote(cfg, today, action) and
-                            not rules.cache_fresh(cache, cfg, rules.now_kst()) and
-                            rules.plan_action(cfg, today, action, {}).enabled)
-        if not plan.enabled and not refresh_required:
-            core.log.info("건너뜀: %s", plan.reason)
-            return 0
-    if not core.chromium_ready():
-        raise RuntimeError("Chromium이 없습니다. 설정 > Chromium 설치를 실행하세요.")
     attempts = 1 if probing else cfg["retry_count"]
     last_error = ""
     for attempt in range(attempts):
         try:
             if rules.now_kst().date() != today:
                 raise RuntimeError("날짜가 변경되어 재시도를 중단했습니다.")
-            result = run_once(cfg, dry_run=args.dry_run, headed=args.headed, inspect=args.inspect,
-                              inspect_login=args.inspect_login, action=action, force=args.force,
-                              scheduled=getattr(args, "scheduled", False))
+            result = _attempt(cfg, args, action, probing, requested_at)
+            args.result = result
             core.log.info("%s", result)
-            if not probing and result in (f"{title} 체크 성공", f"이미 {title} 체크됨"):
-                state = core.load_state()
-                state["last_" + action + "_date"] = today.isoformat()
-                state["last_" + action + "_result"] = result
-                state["last_result"] = result
-                state["last_run_at"] = rules.now_kst().isoformat(timespec="seconds")
-                state.setdefault("history", []).append({"date": today.isoformat(), "action": action,
-                                                        "at": state["last_run_at"], "result": result})
-                state["history"] = state["history"][-180:]
-                core.save_state(state)
             return 0
+        except core.OperationBusy as exc:
+            args.error = str(exc)
+            core.log.info("%s 대기: %s", title, exc)
+            return 2
         except Exception as exc:
             last_error = str(exc)
             core.log.error("%s 실패 (%d/%d): %s", title, attempt + 1, attempts, exc)
@@ -299,12 +319,24 @@ def _do_run(cfg: dict, args) -> int:
             if attempt + 1 < attempts:
                 time.sleep(cfg["retry_delay_seconds"])
     if not probing:
-        state = core.load_state()
-        state["last_" + action + "_error"] = last_error
-        state["last_error_at"] = rules.now_kst().isoformat(timespec="seconds")
-        core.save_state(state)
-        if cfg["notify_on_failure"]:
+        notify = False
+        try:
+            with core.execution_lock(timeout=5, label="실행 결과 저장"):
+                state = core.load_state()
+                # Another operation may have recovered while this one was retrying.
+                if state.get("last_" + action + "_date") != today.isoformat():
+                    notify = state.get("last_" + action + "_error") != last_error or not state.get(
+                        "last_" + action + "_error_at", "").startswith(today.isoformat())
+                    state["last_" + action + "_error"] = last_error
+                    state["last_" + action + "_error_at"] = rules.now_kst().isoformat(timespec="seconds")
+                    state["last_error_at"] = state["last_" + action + "_error_at"]
+                    core.save_state(state)
+        except core.OperationBusy:
+            core.log.warning("다른 작업이 실행 중이어서 실패 상태 저장을 보류합니다. 원인: %s", last_error)
+        # Never hold the browser lock while showing a dialog or sleeping.
+        if cfg["notify_on_failure"] and notify:
             core.notify_failure(f"두레이 {title} 실패\n{last_error}")
+    args.error = last_error
     return 1
 
 
@@ -321,9 +353,11 @@ def tick(cfg: dict, *, now: dt.datetime | None = None) -> list[str]:
             sync_error = exc
             cache = core.load_calendar(cfg)
     for action in rules.ACTIONS:
-        # Browser work may take minutes: never reuse the pre-sync wall clock in production.
+        # A reservation accepted within grace keeps its timestamp across slow sync.
+        # Newly due reservations use the current clock; no expired job is backdated.
         current = provided_now or rules.now_kst()
-        ok, _ = due(cfg, current, action, cache)
+        accepted = now if due(cfg, now, action, cache)[0] else current
+        ok, _ = due(cfg, accepted, action, cache)
         if not ok:
             continue
         state = core.load_state()
@@ -332,8 +366,11 @@ def tick(cfg: dict, *, now: dt.datetime | None = None) -> list[str]:
         if needs_remote(cfg, current.date(), action) and not rules.cache_fresh(cache, cfg, current):
             continue
         args = types.SimpleNamespace(action=action, dry_run=False, inspect=False, inspect_login=False,
-                                     force=False, headed=False, scheduled=True)
-        if do_run(cfg, args) != 0:
+                                     force=False, headed=False, scheduled=True, requested_at=accepted)
+        result = do_run(cfg, args)
+        if result == 2:
+            continue
+        if result != 0:
             raise RuntimeError(f"{rules.LABELS[action]} 예약 실행 실패. 잠시 후 다시 확인합니다.")
         completed.append(action)
     if sync_error:

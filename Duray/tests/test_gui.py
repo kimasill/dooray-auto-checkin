@@ -26,7 +26,8 @@ class DesktopTest(unittest.TestCase):
         assert self.base.resolve().is_relative_to(output.resolve())
         self.patches = []
         for name, value in (("CONFIG_PATH", self.base / "config.json"), ("DATA_DIR", self.base),
-                            ("CALENDAR_PATH", self.base / "calendar.json"), ("LOG_DIR", self.base / "logs")):
+                            ("CALENDAR_PATH", self.base / "calendar.json"), ("LOG_DIR", self.base / "logs"),
+                            ("STATE_PATH", self.base / "state.json")):
             self.patches.append(patch.object(core, name, value))
         self.patches.append(patch.object(scheduler, "status", return_value={"exists": False}))
         self.patches.append(patch.object(scheduler, "enable"))
@@ -213,6 +214,24 @@ class DesktopTest(unittest.TestCase):
             self.wait()
         self.assertIn("근태 조회 실패", self.app.connection_status.cget("text"))
         self.assertEqual(self.app.connection_status.cget("fg"), "#B25545")
+
+    def test_checkout_probe_explicitly_says_no_record_created(self):
+        def run(cfg, args):
+            self.assertTrue(args.dry_run)
+            args.result = "퇴근 테스트 성공 (실제 클릭 없음)"
+            return 0
+        with patch.object(core, "do_run", side_effect=run), patch.object(desktop_ui.messagebox, "showinfo") as info:
+            self.app.run_action("checkout", dry=True)
+            self.wait()
+            self.assertIn("생성하지 않았습니다", info.call_args.args[1])
+        self.assertIn("새 출퇴근 기록", self.app.action_status.cget("text"))
+        self.assertNotIn("last_checkout_date", core.load_state())
+
+    def test_dashboard_shows_today_checkout_failure(self):
+        core.save_state({"last_checkout_error": "필수 비밀번호 변경 [PASSWORD_EXPIRED]",
+                         "last_checkout_error_at": rules.now_kst().isoformat()})
+        self.app.refresh_summary()
+        self.assertIn("최근 시도 실패", self.app.summary["checkout"][1].cget("text"))
 
 
 if __name__ == "__main__":

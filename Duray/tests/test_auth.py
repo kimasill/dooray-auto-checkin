@@ -61,6 +61,16 @@ class AuthRulesTest(unittest.TestCase):
             auth.clear_failure(self.cfg)
             auth.check_blocked(self.cfg)
 
+    def test_old_password_notice_block_is_rechecked_but_new_expiry_stays_blocked(self):
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temp, patch.object(core, "PROFILE_DIR", Path(temp)):
+            assert Path(temp).resolve().is_relative_to(OUTPUT.resolve())
+            core.atomic_json(auth.profile_path(self.cfg) / "connection-block.json",
+                             {"code": "PASSWORD_EXPIRED", "message": "old reminder"})
+            auth.check_blocked(self.cfg)
+            auth.remember_failure(self.cfg, auth.ConnectionProblem("PASSWORD_EXPIRED", "필수 변경", "웹에서 변경"))
+            with self.assertRaisesRegex(auth.ConnectionProblem, "PASSWORD_EXPIRED"):
+                auth.check_blocked(self.cfg)
+
 
 @unittest.skipUnless(BROWSER and Path(BROWSER).is_file(), "Set DOORAY_TEST_BROWSER")
 class LoginBrowserTest(unittest.TestCase):
@@ -148,6 +158,22 @@ class LoginBrowserTest(unittest.TestCase):
         cancel.set()
         with self.assertRaisesRegex(auth.ConnectionProblem, "CANCELLED"):
             auth.ensure_logged_in(self.page, self.cfg, manual=True, cancel=cancel)
+        self.pw_mock.assert_not_called()
+
+    def test_optional_90_day_reminder_can_continue_without_changing_password(self):
+        self.load("<p>비밀번호를 변경해 주세요</p><p>마지막으로 비밀번호를 변경하신지 90일이 지났습니다.</p>"
+                  "<input type='password' autocomplete='new-password'>"
+                  "<button onclick=\"window.submits++; setTimeout(()=>document.body.innerHTML=window.result, 600)\">다음에 변경하기</button>")
+        auth.ensure_logged_in(self.page, self.cfg)
+        self.assertEqual(self.page.evaluate("window.submits"), 1)
+        self.assertEqual(self.page.evaluate("window.mutations"), 0)
+        self.pw_mock.assert_not_called()
+
+    def test_mandatory_password_change_still_stops(self):
+        self.load("<p>비밀번호가 만료되었습니다. 비밀번호를 변경해 주세요</p>"
+                  "<input type='password' autocomplete='new-password'><button>변경하기</button>")
+        with self.assertRaisesRegex(auth.ConnectionProblem, "PASSWORD_EXPIRED"):
+            auth.ensure_logged_in(self.page, self.cfg)
         self.pw_mock.assert_not_called()
 
 

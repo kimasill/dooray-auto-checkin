@@ -29,6 +29,10 @@ def check_blocked(cfg):
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
+    # 2.1.1 misclassified Dooray's optional 90-day reminder as forced expiry.
+    # Recheck those old records once; genuine expiry is saved with version 2.
+    if value.get("code") == "PASSWORD_EXPIRED" and value.get("version", 1) < 2:
+        return
     raise ConnectionProblem(value["code"], value["message"],
                             "자동 재시도를 중지했습니다. 연결 · 설정에서 수정 후 저장하고 연결 확인 또는 브라우저에서 직접 로그인을 실행하세요.")
 
@@ -36,7 +40,8 @@ def check_blocked(cfg):
 def remember_failure(cfg, exc):
     if isinstance(exc, ConnectionProblem) and exc.code in {
             "CREDENTIALS", "ACCOUNT_LOCKED", "PASSWORD_EXPIRED", "EXTRA_AUTH", "PASSWORD_MISSING", "LOGIN_UNCONFIRMED"}:
-        core.atomic_json(profile_path(cfg) / "connection-block.json", {"code": exc.code, "message": str(exc)})
+        core.atomic_json(profile_path(cfg) / "connection-block.json",
+                         {"version": 2, "code": exc.code, "message": str(exc)})
 
 
 def clear_failure(cfg):
@@ -95,6 +100,24 @@ def trusted_password_origin(url, cfg):
         parsed.netloc == urlparse(cfg["tenant_url"]).netloc or host == "dooray.com" or host.endswith(".dooray.com"))
 
 
+def defer_optional_password_reminder(page, cfg, *, click=True):
+    """Use only Dooray's explicit optional choice; never alter a password."""
+    if not trusted_password_origin(page.url, cfg):
+        return False
+    text = core.page_text(page)
+    if not re.search(r"마지막으로 비밀번호를 변경하신지|비밀번호를 변경해 주세요", text):
+        return False
+    button, _ = core.find_first(page, ["button:text-is('다음에 변경하기')", "a:text-is('다음에 변경하기')",
+                                      "[role='button']:text-is('다음에 변경하기')"])
+    if button is None or not button.is_enabled():
+        return False
+    if not trusted_password_origin(button.evaluate("(el) => el.ownerDocument.location.href"), cfg):
+        return False
+    if click:
+        button.click()
+    return True
+
+
 def authenticated(page, cfg, evidence=None):
     if urlparse(page.url).netloc != urlparse(cfg["tenant_url"]).netloc:
         return False
@@ -117,6 +140,7 @@ def ensure_logged_in(page, cfg, *, evidence=None, manual=False, progress=None, c
     id_submitted = False
     seen_form = False
     last_progress = ""
+    reminder_deferred = False
     while time.monotonic() < deadline:
         check_cancel(cancel)
         if page.is_closed():
@@ -124,6 +148,14 @@ def ensure_logged_in(page, cfg, *, evidence=None, manual=False, progress=None, c
         if authenticated(page, cfg, evidence):
             emit("로그인 확인 완료 · 출퇴근 기록은 변경하지 않습니다.")
             return
+        if not manual and not reminder_deferred and defer_optional_password_reminder(page, cfg):
+            reminder_deferred = True
+            emit("선택 가능한 비밀번호 변경 안내 · 다음에 변경하기로 로그인 계속.")
+            page.wait_for_timeout(250)
+            continue
+        if reminder_deferred and defer_optional_password_reminder(page, cfg, click=False):
+            page.wait_for_timeout(250)
+            continue
         problem = visible_problem(page)
         if problem and not manual:
             raise problem

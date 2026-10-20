@@ -1,5 +1,6 @@
 """Offline browser fixtures: every network request is fulfilled locally."""
 import copy
+import datetime as dt
 import os
 import sys
 import unittest
@@ -63,6 +64,19 @@ class BrowserTest(unittest.TestCase):
         self.cfg["selectors"]["checkout_button"] = "#in button"
         with self.assertRaisesRegex(RuntimeError, "버튼 문구"):
             self.run_fixture(self.html(in_time="09:00:00"), action="checkout")
+
+    def test_queued_reservation_uses_acceptance_time_for_grace(self):
+        accepted = dt.datetime(2026, 10, 20, 9, 0, 1, tzinfo=rules.KST)
+        self.cfg.update(checkin_time="09:00", late_grace_minutes=0)
+        with patch.object(rules, "now_kst", return_value=accepted + dt.timedelta(seconds=20)), \
+                patch.object(core, "load_config", return_value=self.cfg):
+            self.assertEqual(self.run_fixture(self.html(), scheduled=True, requested_at=accepted), "출근 체크 성공")
+
+    def test_expired_reservation_is_not_backdated(self):
+        late = dt.datetime(2026, 10, 20, 9, 0, 20, tzinfo=rules.KST)
+        self.cfg.update(checkin_time="09:00", late_grace_minutes=0)
+        with patch.object(rules, "now_kst", return_value=late), patch.object(core, "load_config", return_value=self.cfg):
+            self.assertEqual(self.run_fixture(self.html(), scheduled=True, requested_at=late), "건너뜀: 지연 허용 시간 초과")
 
     def test_disabled_is_not_success(self):
         with self.assertRaisesRegex(RuntimeError, "기록된 시각"):
