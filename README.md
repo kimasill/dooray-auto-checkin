@@ -2,6 +2,24 @@
 
 Windows에서 Dooray 출퇴근 예약, 근무 달력, 개인 근태를 관리하는 데스크톱 프로그램입니다. 현재 버전은 **2.1.0**입니다.
 
+[Windows 설치 파일 다운로드](https://github.com/kimasill/dooray-auto-checkin/releases/download/v2.1.0/DoorayAutoCheckin-v2.1.0-windows.zip) · [설치 방법](#설치와-업데이트)
+
+## 화면 미리보기
+
+아래는 실제 프로그램 화면입니다. 일정과 설정값은 기능을 보여 주기 위한 예시입니다.
+
+### 근무 달력
+
+연차·오전 반차·오후 반차와 출퇴근 예정 시각을 한눈에 확인합니다. 날짜를 클릭하면 오른쪽에서 해당 날짜의 근태와 예약을 설정할 수 있습니다.
+
+![근무 달력: 연차·반차 색상 표시와 날짜별 출퇴근 설정](docs/images/calendar.png)
+
+### 시간 · 예약
+
+시·분·초 드롭다운으로 시간을 선택하고, 랜덤 범위와 오전·오후 반차별 퇴근 시각을 지정합니다.
+
+![시간 및 예약: 시간 드롭다운, 랜덤 범위, 반차별 퇴근 시각 설정](docs/images/schedule.png)
+
 ## 설치와 업데이트
 
 1. [최신 릴리스](https://github.com/kimasill/dooray-auto-checkin/releases/latest)에서 `DoorayAutoCheckin-v2.1.0-windows.zip`을 받습니다.
@@ -19,10 +37,6 @@ Windows에서 Dooray 출퇴근 예약, 근무 달력, 개인 근태를 관리하
 - **출퇴근 예약:** 고정 시각 또는 기준 시각 이전/이후 각각 0~720분의 랜덤 범위
 - **반차별 퇴근:** 출근 시각은 유지하고 오전·오후 반차의 퇴근 시각을 별도 지정
 - **설정 보존:** 이전 버전 설정 호환, 중복 처리 방지, 날짜별 수동 설정 우선 적용
-
-![근무 달력 — 예시 일정](docs/images/calendar.png)
-
-![시간 및 예약 설정 — 예시 설정](docs/images/schedule.png)
 
 ## 근태를 예약에 반영하기
 
