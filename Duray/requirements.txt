@@ -1,0 +1,3 @@
+playwright>=1.49
+keyring>=25.0
+holidays>=0.60

@@ -1,0 +1,28 @@
+# Local accounts, browser sessions and attendance records
+**/config.json
+**/state.json
+**/calendar.json
+**/profile/
+**/logs/
+**/screenshots/
+.env
+.env.*
+*.lock
+*.tmp
+
+# Python and build outputs
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.build/
+/build/
+/dist/
+/release/
+/backups/
+/test-output/
+*.exe
+*.zip
+*.log
+.DS_Store
+Thumbs.db
