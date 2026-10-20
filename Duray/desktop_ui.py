@@ -9,6 +9,7 @@ import queue
 import threading
 import tkinter as tk
 import types
+import uuid
 from tkinter import messagebox, ttk
 
 import attendance_rules as rules
@@ -55,7 +56,7 @@ class App:
         self.selected = self.today
         self.month = self.today.replace(day=1)
         self.overrides = copy.deepcopy(self.cfg["date_overrides"])
-        root.title(TITLE + "  ·  2.1")
+        root.title(TITLE + "  ·  2.1.1")
         root.geometry("1380x920")
         root.minsize(1180, 800)
         root.configure(bg=BG)
@@ -87,7 +88,7 @@ class App:
                                cursor="hand2", command=lambda k=key: self.show(k))
             button.pack(fill="x", padx=10, pady=3)
             self.nav_buttons[key] = button
-        tk.Label(side, text="개인 자동화 도구\n버전 2.1 · 한국 시간", justify="left", bg=NAV, fg=MUTED, font=("Malgun Gothic", 9)).pack(side="bottom", anchor="w", padx=25, pady=25)
+        tk.Label(side, text="개인 자동화 도구\n버전 2.1.1 · 한국 시간", justify="left", bg=NAV, fg=MUTED, font=("Malgun Gothic", 9)).pack(side="bottom", anchor="w", padx=25, pady=25)
         main = tk.Frame(root, bg=BG)
         main.pack(side="left", fill="both", expand=True)
         header = tk.Frame(main, bg=CARD, height=66)
@@ -368,14 +369,32 @@ class App:
         box = self.card(page, "두레이 계정")
         box.pack(fill="x", pady=(0, 14))
         self.field(box, "회사 두레이 주소", "tenant_url")
+        self.label(box, "예: https://회사.dooray.com  ·  /home 등은 아래 페이지 경로에 입력하세요.", color=MUTED, size=9).pack(anchor="w", pady=(0, 5))
         self.field(box, "출퇴근 페이지 경로", "attendance_path")
         self.field(box, "로그인 ID", "login_id")
-        self.field(box, "비밀번호", "password", secret=True)
-        self.password_label = self.label(box, "기존 비밀번호 유지: 변경할 때만 입력하세요. Windows 자격 증명 관리자에 저장합니다.", color=MUTED, size=9)
+        self.password_entry = self.field(box, "비밀번호", "password", secret=True)
+        self.password_visible = tk.BooleanVar(value=False)
+        CheckButton(box, text="입력한 비밀번호 보기", variable=self.password_visible,
+                    command=lambda: self.password_entry.configure(show="" if self.password_visible.get() else "●")).pack(anchor="w")
+        self.password_label = self.label(box, "비밀번호를 비워두면 이 ID에 저장된 값을 사용합니다. ID를 바꾸면 비밀번호도 다시 입력하세요.", color=MUTED, size=9)
         self.password_label.pack(anchor="w", pady=(6, 0))
+        self.connection_status = self.label(box, "연결 미확인 · 아래 버튼으로 입력값 저장과 로그인을 함께 확인하세요.",
+                                            color=MUTED, size=10, justify="left", wraplength=820)
+        self.connection_status.pack(anchor="w", pady=(12, 4))
         row = tk.Frame(box, bg=CARD)
         row.pack(fill="x", pady=(12, 0))
-        self.button(row, "저장된 비밀번호 삭제", self.delete_password).pack(side="left")
+        self.button(row, "저장하고 연결 확인", self.connect, primary=True).pack(side="left")
+        self.button(row, "브라우저에서 직접 로그인", lambda: self.connect(manual=True)).pack(side="left", padx=8)
+        self.cancel_connection = ttk.Button(row, text="연결 취소", state="disabled",
+                                            command=self.request_connection_cancel)
+        self.cancel_connection.pack(side="left")
+        self.connection_cancel = threading.Event()
+        self.button(box, "저장된 비밀번호 삭제", self.delete_password).pack(anchor="w", pady=(10, 0))
+        self.label(box, "직접 로그인: 입력한 설정을 저장한 뒤 브라우저를 엽니다. SSO·OTP는 직접 완료하세요.\n로그인 성공과 이번 달 근태 조회를 따로 확인합니다. 출근·퇴근 버튼은 누르지 않습니다.",
+                   color=MUTED, size=9, justify="left", wraplength=820).pack(anchor="w", pady=(8, 0))
+        for key in ("tenant_url", "attendance_path", "login_id", "password", "dooray_calendar_path"):
+            self.vars[key].trace_add("write", lambda *_: self.connection_status.configure(
+                text="입력값 변경 · 저장하고 연결 확인을 눌러 현재 값으로 확인하세요.", fg=MUTED))
         box = self.card(page, "두레이 근태 연동")
         box.pack(fill="x", pady=(0, 14))
         CheckButton(box, text="본인 근태 달력의 휴가 / 반차 / 휴무를 자동 반영", variable=self.vars["dooray_sync_enabled"]).pack(anchor="w")
@@ -460,6 +479,7 @@ class App:
             if password:
                 import keyring
                 keyring.set_password(core.KEYRING_SERVICE, cfg["login_id"], password)
+                cfg["login_revision"] = uuid.uuid4().hex
             core.save_config(cfg)
             st = scheduler.status()
             if st.get("exists") and st.get("state") != "Disabled" and not st.get("watcher"):
@@ -496,11 +516,12 @@ class App:
             self.background("자동 예약 켜기", lambda: scheduler.enable(self.cfg))
         self.save(after=enable)
 
-    def background(self, label, fn, done=None, quiet=False):
+    def background(self, label, fn, done=None, quiet=False, failed=None):
         if self.busy:
             return
         self.busy = True
         self.quiet_work = quiet
+        self.failed_work = failed
         for button in self.buttons:
             button.configure(state="disabled")
         self.feedback.configure(text=label + "…", fg=MUTED)
@@ -512,6 +533,42 @@ class App:
             except (Exception, SystemExit) as exc:
                 self.events.put(("done", (done, None, str(exc), label)))
         threading.Thread(target=worker, daemon=True).start()
+
+    def account_dirty(self):
+        return bool(self.vars["password"].get()) or any(
+            self.vars[key].get().strip().rstrip("/") != self.cfg.get(key, "").rstrip("/")
+            for key in ("tenant_url", "login_id", "attendance_path", "dooray_calendar_path"))
+
+    def request_connection_cancel(self):
+        self.connection_cancel.set()
+        self.connection_status.configure(text="취소 요청됨 · 현재 페이지 응답 대기가 끝나면 닫습니다.", fg=MUTED)
+        self.cancel_connection.configure(state="disabled")
+
+    def connect(self, manual=False):
+        if self.busy:
+            return
+        def start():
+            cfg = copy.deepcopy(self.cfg)
+            self.connection_cancel.clear()
+            self.connection_status.configure(text="연결 확인 중 · 브라우저 준비…", fg=ACCENT)
+            def progress(message):
+                self.events.put(("connection", message))
+            def finish(result):
+                self.cancel_connection.configure(state="disabled")
+                self.connection_status.configure(
+                    text=result["message"] if not self.account_dirty() else "확인 중 입력값이 변경되었습니다. 다시 저장하고 연결 확인을 누르세요.",
+                    fg=ACCENT if result["ok"] else "#B25545")
+                self.cache = core.load_calendar(self.cfg)
+                self.render_calendar(update_editor=False)
+            def failed(error):
+                self.cancel_connection.configure(state="disabled")
+                self.connection_status.configure(text=error, fg="#B25545")
+            self.background("두레이 연결 확인",
+                            lambda: runtime.check_connection(cfg, manual=manual, progress=progress,
+                                                             cancel=self.connection_cancel),
+                            finish, failed=failed)
+            self.cancel_connection.configure(state="normal")
+        self.save(after=start)
 
     def run_action(self, action, dry=False):
         if not dry and not messagebox.askyesno(TITLE, f"지금 실제 {rules.LABELS[action]} 처리할까요?\n오늘의 휴일/휴가 및 날짜별 OFF 설정을 무시합니다.", parent=self.root):
@@ -527,6 +584,11 @@ class App:
 
     def sync(self, quiet=False):
         if self.busy:
+            return
+        if self.account_dirty():
+            if not quiet:
+                self.show("settings")
+                self.connection_status.configure(text="계정 입력값이 아직 저장되지 않았습니다. 저장하고 연결 확인을 먼저 누르세요.", fg="#B25545")
             return
         cfg = copy.deepcopy(self.cfg)
         def run():
@@ -545,13 +607,17 @@ class App:
 
     def auto_sync(self):
         now = rules.now_kst()
-        if self.busy or now.timestamp() < getattr(self, "next_auto_sync", 0):
+        if self.busy or self.account_dirty() or now.timestamp() < getattr(self, "next_auto_sync", 0):
             return
         if self.cfg.get("login_id") and "YOURCOMPANY" not in self.cfg.get("tenant_url", "") and not rules.cache_fresh(self.cache, self.cfg, rules.now_kst()):
             self.next_auto_sync = now.timestamp() + 300
             self.sync(quiet=True)
 
     def probe(self, login):
+        if self.account_dirty():
+            self.show("settings")
+            self.connection_status.configure(text="계정 변경 후에는 저장하고 연결 확인을 먼저 누르세요.", fg="#B25545")
+            return
         cfg = copy.deepcopy(self.cfg)
         args = types.SimpleNamespace(action="checkin", dry_run=False, inspect=not login, inspect_login=login, headed=True, force=True)
         self.show("logs")
@@ -728,6 +794,8 @@ class App:
                     self.log_text.configure(state="disabled")
                 elif kind == "status":
                     self.apply_status(value)
+                elif kind == "connection":
+                    self.connection_status.configure(text=value, fg=ACCENT)
                 elif kind == "done":
                     done, result, error, label = value
                     self.busy = False
@@ -737,6 +805,8 @@ class App:
                     self.events.put(("log", label + (": " + error if error else " 완료")))
                     if error:
                         self.cache = core.load_calendar(self.cfg)
+                        if self.failed_work:
+                            self.failed_work(error)
                         if not self.quiet_work:
                             messagebox.showerror(TITLE, error, parent=self.root)
                     elif done:

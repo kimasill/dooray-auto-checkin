@@ -8,9 +8,24 @@ import types
 import attendance_rules as rules
 import dooray_calendar
 import dooray_checkin as core
+import dooray_auth as auth
 
 
-def sync_page(page, cfg: dict, reader=None) -> dict:
+def check_connection(cfg: dict, *, manual=False, progress=None, cancel=None):
+    """Read-only connection verification; never call either attendance action."""
+    rules.validate_config(cfg, require_account=True)
+    if not core.chromium_ready():
+        raise auth.ConnectionProblem("BROWSER", "Chromium이 설치되지 않았습니다.",
+                                     "연결 · 설정 아래의 Chromium 설치를 누른 뒤 다시 확인하세요.")
+    try:
+        with core.execution_lock():
+            return run_once(cfg, dry_run=True, headed=manual, inspect=False,
+                            connection_only=True, manual_login=manual, progress=progress, cancel=cancel)
+    except Exception as exc:
+        raise auth.translate_error(exc) from exc
+
+
+def sync_page(page, cfg: dict, reader=None, cancel=None) -> dict:
     today = rules.now_kst().date()
     url = cfg["tenant_url"].rstrip("/") + cfg["dooray_calendar_path"]
     if page.url.rstrip("/") != url.rstrip("/"):
@@ -18,6 +33,7 @@ def sync_page(page, cfg: dict, reader=None) -> dict:
     # A SPA may finish the document before its calendar has rendered.
     deadline = time.monotonic() + cfg["timeout_ms"] / 1000
     while True:
+        auth.check_cancel(cancel)
         try:
             key = today.strftime("%Y-%m")
             if reader and key in reader.errors:
@@ -43,6 +59,7 @@ def sync_calendar(cfg: dict, *, headed: bool = False) -> dict:
         try:
             return run_once(cfg, dry_run=True, headed=headed, inspect=False, sync_only=True)
         except Exception as exc:
+            exc = auth.translate_error(exc)
             cache = core.load_calendar(cfg)
             cache["identity"] = rules.cache_identity(cfg)
             cache["error"] = str(exc)
@@ -69,19 +86,24 @@ def due(cfg: dict, now: dt.datetime, action: str, cache: dict) -> tuple[bool, st
 
 def run_once(cfg: dict, *, dry_run: bool, headed: bool, inspect: bool,
              inspect_login: bool = False, action: str = "checkin", force: bool = False,
-             scheduled: bool = False, sync_only: bool = False):
+             scheduled: bool = False, sync_only: bool = False, connection_only: bool = False,
+             manual_login: bool = False, progress=None, cancel=None):
     from playwright.sync_api import sync_playwright
     if action not in rules.ACTIONS:
         raise ValueError("알 수 없는 출퇴근 동작")
     title = rules.LABELS[action]
     selectors = core.CHECKIN_CANDIDATES if action == "checkin" else core.CHECKOUT_CANDIDATES
     url = cfg["tenant_url"].rstrip("/") + (cfg["dooray_calendar_path"] if sync_only else cfg["attendance_path"])
-    core.PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    profile = auth.profile_path(cfg)
+    if not connection_only and not inspect_login:
+        auth.check_blocked(cfg)
+    profile.mkdir(parents=True, exist_ok=True)
+    emit = progress or (lambda message: core.log.info("%s", message))
     started_at = rules.now_kst()
     started_day = started_at.date()
     with sync_playwright() as pw:
         ctx = pw.chromium.launch_persistent_context(
-            user_data_dir=str(core.PROFILE_DIR),
+            user_data_dir=str(profile),
             channel="chromium",
             headless=cfg["headless"] and not (headed or inspect or inspect_login),
             locale="ko-KR", timezone_id="Asia/Seoul", viewport={"width": 1440, "height": 900},
@@ -91,19 +113,59 @@ def run_once(cfg: dict, *, dry_run: bool, headed: bool, inspect: bool,
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         reader = dooray_calendar.AttendanceReader(cfg)
         page.on("response", reader.observe)
+        login_verified = False
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=cfg["timeout_ms"])
-            page.wait_for_timeout(1500)
+            emit("회사 두레이 주소에 접속하고 있습니다.")
+            response = page.goto(url, wait_until="domcontentloaded", timeout=cfg["timeout_ms"])
+            if response and response.status >= 400:
+                raise auth.ConnectionProblem("HTTP", f"두레이 페이지 접속 오류 (HTTP {response.status}).",
+                                             "회사 주소·페이지 경로와 접속 권한을 확인하세요. 서버 장애이면 잠시 후 다시 시도하세요.",
+                                             retryable=response.status >= 500)
             if inspect_login:
                 core.dump_inputs(page)
                 core.screenshot(page, "inspect-login")
                 return "로그인 화면 점검 완료"
-            core.ensure_logged_in(page, cfg)
+            def evidence():
+                if reader.months:
+                    return True
+                if sync_only:
+                    try:
+                        return bool(dooray_calendar.read_month(page, cfg, started_day))
+                    except RuntimeError:
+                        pass
+                return False
+            core.ensure_logged_in(page, cfg, evidence=evidence, manual=manual_login,
+                                  progress=emit, cancel=cancel)
+            login_verified = True
+            auth.clear_failure(cfg)
+            auth.check_cancel(cancel)
             if page.url.rstrip("/") != url.rstrip("/"):
                 page.goto(url, wait_until="domcontentloaded", timeout=cfg["timeout_ms"])
             page.wait_for_timeout(1500)
             if sync_only:
                 return sync_page(page, cfg, reader)
+            if connection_only:
+                emit("로그인 완료 · 출퇴근 화면을 확인하고 있습니다.")
+                button, _ = core.wait_for_any(page, core.candidates(cfg, "checkin_button", core.CHECKIN_CANDIDATES)
+                                             + core.candidates(cfg, "checkout_button", core.CHECKOUT_CANDIDATES),
+                                             cfg["timeout_ms"], cancel=cancel)
+                if button is None:
+                    raise auth.ConnectionProblem("ATTENDANCE_PAGE", "로그인했지만 출퇴근 화면을 찾지 못했습니다.",
+                                                 "출퇴근 페이지 경로와 회사의 근태 사용 권한을 확인하세요.")
+                emit("로그인·출퇴근 화면 확인 완료 · 이번 달 근태를 가져오고 있습니다.")
+                try:
+                    cache = sync_page(page, cfg, reader, cancel=cancel)
+                except Exception as exc:
+                    if isinstance(exc, auth.ConnectionProblem) and exc.code == "CANCELLED":
+                        raise
+                    error = str(auth.translate_error(exc))
+                    cache = core.load_calendar(cfg)
+                    cache.update(identity=rules.cache_identity(cfg), error=error)
+                    core.atomic_json(core.CALENDAR_PATH, cache)
+                    return {"ok": False, "message": "로그인·출퇴근 화면 확인 완료 / 근태 조회 실패\n"
+                            "본인 월별 근태 경로와 조회 권한을 확인하세요.\n" + error}
+                return {"ok": True, "message": "연결 완료 · 로그인 / 출퇴근 화면 / 이번 달 근태 확인\n"
+                        f"{cache['month']} 근태 {len(cache['days'])}일을 가져왔습니다. 실제 출퇴근은 처리하지 않았습니다."}
             if inspect:
                 core.dump_clickables(page)
                 core.screenshot(page, "inspect-" + action)
@@ -163,9 +225,16 @@ def run_once(cfg: dict, *, dry_run: bool, headed: bool, inspect: bool,
                     core.screenshot(page, "success-" + action)
                     return f"{title} 체크 성공"
             raise RuntimeError(f"{title} 클릭 후 기록된 시각을 확인하지 못했습니다. 로그와 스크린샷을 확인하세요.")
-        except Exception:
-            core.screenshot(page, "failed-" + action)
-            raise
+        except Exception as exc:
+            problem = auth.translate_error(exc)
+            if not login_verified and not isinstance(problem, auth.ConnectionProblem):
+                problem = auth.ConnectionProblem("LOGIN_SCREEN", "로그인 화면을 처리하지 못했습니다.",
+                                                 "페이지가 바뀌었거나 입력란을 사용할 수 없습니다. 브라우저에서 직접 로그인을 실행하세요.")
+            auth.remember_failure(cfg, problem)
+            # Login pages may contain typed credentials; don't capture them.
+            if login_verified and not isinstance(problem, auth.ConnectionProblem):
+                core.screenshot(page, "failed-" + action)
+            raise problem from exc
         finally:
             ctx.close()
 
@@ -225,6 +294,8 @@ def _do_run(cfg: dict, args) -> int:
         except Exception as exc:
             last_error = str(exc)
             core.log.error("%s 실패 (%d/%d): %s", title, attempt + 1, attempts, exc)
+            if isinstance(exc, auth.ConnectionProblem) and not exc.retryable:
+                break
             if attempt + 1 < attempts:
                 time.sleep(cfg["retry_delay_seconds"])
     if not probing:

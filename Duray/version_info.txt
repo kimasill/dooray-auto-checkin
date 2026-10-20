@@ -3,8 +3,8 @@
 # 받는 사람이 정체 불명 파일로 오해하지 않게 해준다.
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 1, 0, 0),
-    prodvers=(2, 1, 0, 0),
+    filevers=(2, 1, 1, 0),
+    prodvers=(2, 1, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -18,12 +18,12 @@ VSVersionInfo(
         '041204B0',
         [StringStruct('CompanyName', 'AICHEMIST'),
          StringStruct('FileDescription', '두레이 자동 출퇴근'),
-         StringStruct('FileVersion', '2.1.0.0'),
+         StringStruct('FileVersion', '2.1.1.0'),
          StringStruct('InternalName', 'DoorayAutoCheckin'),
          StringStruct('LegalCopyright', 'Internal use only'),
          StringStruct('OriginalFilename', 'DoorayAutoCheckin.exe'),
          StringStruct('ProductName', '두레이 자동 출퇴근'),
-         StringStruct('ProductVersion', '2.1.0.0')])
+         StringStruct('ProductVersion', '2.1.1.0')])
     ]),
     VarFileInfo([VarStruct('Translation', [1042, 1200])])
   ]

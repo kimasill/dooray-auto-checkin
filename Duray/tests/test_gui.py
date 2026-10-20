@@ -175,6 +175,45 @@ class DesktopTest(unittest.TestCase):
             error.assert_called_once()
         self.assertEqual(core.CONFIG_PATH.read_text(encoding="utf-8"), original)
 
+    def test_connect_saves_current_credentials_before_check(self):
+        self.app.vars["login_id"].set("new-fixture")
+        self.app.vars["password"].set("new-fixture-password")
+        def verify(cfg, **kwargs):
+            self.assertEqual(core.load_config()["login_id"], "new-fixture")
+            self.assertEqual(cfg["login_id"], "new-fixture")
+            self.assertTrue(cfg["login_revision"])
+            return {"ok": True, "message": "연결 완료"}
+        with patch("keyring.set_password") as saved, \
+                patch.object(desktop_ui.runtime, "check_connection", side_effect=verify):
+            self.app.connect()
+            self.wait()
+            saved.assert_called_once_with(core.KEYRING_SERVICE, "new-fixture", "new-fixture-password")
+        self.assertEqual(self.app.vars["password"].get(), "")
+        self.assertEqual(self.app.connection_status.cget("text"), "연결 완료")
+
+    def test_sync_does_not_silently_use_old_account(self):
+        self.app.vars["password"].set("not-saved")
+        with patch.object(desktop_ui.runtime, "sync_calendar") as sync:
+            self.app.sync()
+            sync.assert_not_called()
+        self.assertEqual(self.app.current, "settings")
+        self.assertIn("저장", self.app.connection_status.cget("text"))
+
+    def test_connection_failure_remains_visible_on_settings(self):
+        with patch.object(desktop_ui.runtime, "check_connection", side_effect=RuntimeError("비밀번호 오류 [CREDENTIALS]")), \
+                patch.object(desktop_ui.messagebox, "showerror"):
+            self.app.connect()
+            self.wait()
+        self.assertIn("CREDENTIALS", self.app.connection_status.cget("text"))
+        self.assertEqual(str(self.app.cancel_connection.cget("state")), "disabled")
+
+    def test_partial_connection_is_not_shown_as_full_success(self):
+        with patch.object(desktop_ui.runtime, "check_connection", return_value={"ok": False, "message": "로그인 완료 / 근태 조회 실패"}):
+            self.app.connect()
+            self.wait()
+        self.assertIn("근태 조회 실패", self.app.connection_status.cget("text"))
+        self.assertEqual(self.app.connection_status.cget("fg"), "#B25545")
+
 
 if __name__ == "__main__":
     unittest.main()

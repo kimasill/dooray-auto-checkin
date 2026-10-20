@@ -18,7 +18,7 @@ function Run-Hidden($path, $argument) {
 function Installed-Processes {
     @(Get-Process DoorayAutoCheckin -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $destExe })
 }
-Write-Host "`n===== 두레이 자동 출퇴근 2.1 설치 / 업데이트 =====`n" -ForegroundColor Green
+Write-Host "`n===== 두레이 자동 출퇴근 2.1.1 설치 / 업데이트 =====`n" -ForegroundColor Green
 if (-not (Test-Path -LiteralPath $srcExe)) { throw "설치 파일과 EXE를 같은 폴더에 두세요: $here" }
 if ([IO.Path]::GetFullPath($srcExe) -eq [IO.Path]::GetFullPath($destExe)) {
     throw '설치된 bin 폴더 대신 압축을 푼 배포 폴더에서 설치를 실행하세요.'

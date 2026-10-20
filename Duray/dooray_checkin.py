@@ -297,11 +297,15 @@ def execution_lock(name: str = "execution"):
 
 def get_password(login_id: str) -> str:
     import keyring
-    pw = keyring.get_password(KEYRING_SERVICE, login_id)
+    from dooray_auth import ConnectionProblem
+    try:
+        pw = keyring.get_password(KEYRING_SERVICE, login_id)
+    except Exception as exc:
+        raise ConnectionProblem("CREDENTIAL_STORE", "Windows에 저장된 비밀번호를 읽을 수 없습니다.",
+                                "평소 사용하는 Windows 계정으로 앱을 실행하고 비밀번호를 다시 저장하세요.") from exc
     if not pw:
-        # SystemExit 이 아니라 RuntimeError 여야 재시도/알림 경로를 정상적으로 탄다.
-        raise RuntimeError(f"저장된 비밀번호가 없습니다 ({login_id}). "
-                           f"설정 탭에서 비밀번호를 입력하고 저장하세요.")
+        raise ConnectionProblem("PASSWORD_MISSING", "이 ID에 저장된 비밀번호가 없습니다.",
+                                "연결 · 설정에 비밀번호를 입력하고 저장하고 연결 확인을 누르세요. SSO 계정은 브라우저에서 직접 로그인을 사용하세요.")
     return pw
 
 
@@ -353,20 +357,25 @@ def candidates(cfg: dict, key: str, defaults: list[str]) -> list[str]:
 
 def find_first(page, selectors: list[str]):
     """모든 프레임을 뒤져 화면에 보이는 첫 요소를 찾는다. (locator, selector) 반환."""
-    for frame in page.frames:
+    for frame in getattr(page, "frames", [page]):
         for sel in selectors:
             try:
-                loc = frame.locator(sel).first
-                if loc.count() > 0 and loc.is_visible():
-                    return loc, sel
+                matches = frame.locator(sel)
+                for i in range(matches.count()):
+                    loc = matches.nth(i)
+                    if loc.is_visible():
+                        return loc, sel
             except Exception:
                 continue
     return None, None
 
 
-def wait_for_any(page, selectors: list[str], timeout_ms: int):
+def wait_for_any(page, selectors: list[str], timeout_ms: int, cancel=None):
     deadline = time.monotonic() + timeout_ms / 1000
     while True:
+        if cancel is not None:
+            from dooray_auth import check_cancel
+            check_cancel(cancel)
         loc, sel = find_first(page, selectors)
         if loc is not None:
             return loc, sel
@@ -379,7 +388,7 @@ def page_text(page) -> str:
     chunks = []
     for frame in page.frames:
         try:
-            chunks.append(frame.inner_text("body"))
+            chunks.append(frame.locator("body").inner_text(timeout=500))
         except Exception:
             continue
     return "\n".join(chunks)
@@ -424,52 +433,9 @@ def screenshot(page, tag: str) -> Path | None:
 # ----------------------------------------------------------------------------
 # 로그인
 # ----------------------------------------------------------------------------
-def ensure_logged_in(page, cfg: dict) -> None:
-    """이미 세션이 살아 있으면 아무것도 하지 않고, 아니면 ID/PW 로 로그인한다."""
-    timeout = cfg["timeout_ms"]
-
-    pw_loc, _ = find_first(page, candidates(cfg, "login_password", LOGIN_PW_CANDIDATES))
-    if pw_loc is None:
-        log.info("기존 세션이 유효합니다. 로그인 생략.")
-        return
-
-    log.info("로그인 화면 감지. ID/비밀번호로 로그인합니다.")
-    id_loc, id_sel = find_first(page, candidates(cfg, "login_id", LOGIN_ID_CANDIDATES))
-    if id_loc is None:
-        screenshot(page, "no-id-field")
-        raise RuntimeError("로그인 ID 입력란을 찾지 못했습니다. --inspect 로 셀렉터를 확인하세요.")
-
-    password = get_password(cfg["login_id"])
-    id_loc.fill(cfg["login_id"])
-    pw_loc.fill(password)
-    log.debug("ID 입력란 셀렉터: %s", id_sel)
-
-    submit, _ = find_first(page, candidates(cfg, "login_submit", LOGIN_SUBMIT_CANDIDATES))
-    if submit is not None:
-        submit.click()
-    else:
-        pw_loc.press("Enter")
-
-    try:
-        page.wait_for_load_state("networkidle", timeout=timeout)
-    except Exception:
-        page.wait_for_timeout(3000)
-
-    text = page_text(page)
-    for marker in BLOCKER_TEXTS:
-        if marker in text:
-            shot = screenshot(page, "login-blocked")
-            raise RuntimeError(
-                f"로그인이 완료되지 않았습니다. 화면에서 '{marker}' 문구가 감지됐습니다. "
-                f"(추가 인증이 필요하거나 비밀번호가 틀렸을 수 있습니다) 스크린샷: {shot}"
-            )
-
-    still_pw, _ = find_first(page, candidates(cfg, "login_password", LOGIN_PW_CANDIDATES))
-    if still_pw is not None:
-        shot = screenshot(page, "login-failed")
-        raise RuntimeError(f"로그인 후에도 비밀번호 입력란이 남아 있습니다. 스크린샷: {shot}")
-
-    log.info("로그인 성공.")
+def ensure_logged_in(page, cfg: dict, **kwargs) -> None:
+    from dooray_auth import ensure_logged_in as authenticate
+    authenticate(page, cfg, **kwargs)
 
 
 # ----------------------------------------------------------------------------

@@ -73,6 +73,8 @@ def validate_config(cfg: dict, *, require_account: bool = False) -> None:
     parsed = urlparse(cfg.get("tenant_url", ""))
     if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.query or parsed.fragment:
         raise ValueError("두레이 주소는 https://로 시작하는 회사 주소를 입력하세요.")
+    if parsed.path not in ("", "/"):
+        raise ValueError("회사 두레이 주소에는 https://회사.dooray.com까지만 입력하세요. /home 등은 출퇴근 페이지 경로에 입력하세요.")
     if require_account and (not cfg.get("login_id", "").strip() or "YOURCOMPANY" in cfg["tenant_url"]):
         raise ValueError("두레이 주소와 로그인 ID를 먼저 저장하세요.")
     for key in ("attendance_path", "dooray_calendar_path"):
