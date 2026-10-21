@@ -174,8 +174,16 @@ class DesktopTest(unittest.TestCase):
         self.app.vars['time_mode'].set(desktop_ui.MODE_LABELS['random'])
         self.app.vars['random_before_minutes'].set('5')
         self.app.vars['random_after_minutes'].set('5')
-        self.app.start_schedule()
-        self.wait()
+        polled_while_busy = []
+        refresh = self.app.refresh_status
+        def poll():
+            if self.app.busy:
+                polled_while_busy.append(True)
+            refresh()
+        with patch.object(self.app, 'refresh_status', side_effect=poll):
+            self.app.start_schedule()
+            self.wait()
+        self.assertEqual(polled_while_busy, [])
         scheduler.enable.assert_called_once()
         saved = scheduler.enable.call_args.args[0]
         self.assertEqual(saved['checkin_time'], '09:55')

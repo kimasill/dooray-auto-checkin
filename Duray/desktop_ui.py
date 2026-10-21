@@ -941,7 +941,10 @@ class App:
                     elif done:
                         done(result)
                     self.refresh_summary()
-                    self.refresh_status()
+                    # A completion callback may have started the next job (save
+                    # -> register). Query its result after that job completes.
+                    if not self.busy:
+                        self.refresh_status()
         except queue.Empty:
             pass
         self.drain_timer = self.root.after(100, self.drain)

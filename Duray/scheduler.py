@@ -54,9 +54,15 @@ def _run_powershell(script: str, timeout: int = 60) -> tuple[int, str, str]:
     (기본값으로 두면 Python 이 cp949 로 디코딩하다 UnicodeDecodeError 가 난다.)
     """
     header = "$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
-    tmp = Path(tempfile.gettempdir()) / f"dooray_ps_{os.getpid()}.ps1"
-    tmp.write_text(header + script, encoding="utf-8-sig")
+    tmp = None
     try:
+        # GUI background jobs and status polling share a PID. A PID-only path
+        # lets one command overwrite (or delete) another command's script.
+        # Close the unique file before PowerShell opens it on Windows.
+        with tempfile.NamedTemporaryFile(mode="w", prefix=f"dooray_ps_{os.getpid()}_", suffix=".ps1",
+                                         encoding="utf-8-sig", delete=False) as handle:
+            tmp = Path(handle.name)
+            handle.write(header + script)
         proc = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive",
              "-ExecutionPolicy", "Bypass", "-File", str(tmp)],
@@ -67,7 +73,8 @@ def _run_powershell(script: str, timeout: int = 60) -> tuple[int, str, str]:
         return proc.returncode, (proc.stdout or "").strip(), (proc.stderr or "").strip()
     finally:
         try:
-            tmp.unlink()
+            if tmp is not None:
+                tmp.unlink()
         except OSError:
             pass
 
