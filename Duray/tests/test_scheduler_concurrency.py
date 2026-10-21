@@ -61,6 +61,16 @@ class PowerShellConcurrencyTest(unittest.TestCase):
         self.assertEqual([item[1] for item in results], labels)
         self.assertFalse(list(self.folder.glob('*.ps1')))
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows PowerShell module resolution')
+    def test_native_hash_command_available_with_inherited_module_path(self):
+        import hashlib
+        source = self.folder/'hash-fixture.txt'
+        source.write_bytes(b'official update verification')
+        script = f"(Get-FileHash -LiteralPath {scheduler._ps_quote(str(source))} -Algorithm SHA256).Hash"
+        result = scheduler._run_powershell(script)
+        self.assertEqual(result[0], 0, result[2])
+        self.assertEqual(result[1].lower(), hashlib.sha256(source.read_bytes()).hexdigest())
+
 
 if __name__ == '__main__':
     unittest.main()

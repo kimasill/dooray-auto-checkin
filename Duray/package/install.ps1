@@ -1,5 +1,7 @@
 ﻿<# Install/update while preserving personal configuration and credentials. #>
 param([switch]$NonInteractive, [switch]$NoLaunch)
+# Prefer this PowerShell's own built-ins over an inherited PowerShell 7 module path.
+$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules') + [IO.Path]::PathSeparator + $env:PSModulePath
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -40,7 +42,7 @@ function Copy-BinaryWithRetry([string]$source, [string]$destination) {
         }
     }
 }
-Write-Host "`n===== 두레이 자동 출퇴근 2.1.4 설치 / 업데이트 =====`n" -ForegroundColor Green
+Write-Host "`n===== 두레이 자동 출퇴근 2.1.5 설치 / 업데이트 =====`n" -ForegroundColor Green
 if (-not (Test-Path -LiteralPath $srcExe)) { throw "설치 파일과 EXE를 같은 폴더에 두세요: $here" }
 if ([IO.Path]::GetFullPath($srcExe) -eq [IO.Path]::GetFullPath($destExe)) {
     throw '설치된 bin 폴더 대신 압축을 푼 배포 폴더에서 설치를 실행하세요.'

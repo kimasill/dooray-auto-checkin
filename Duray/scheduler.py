@@ -53,7 +53,10 @@ def _run_powershell(script: str, timeout: int = 60) -> tuple[int, str, str]:
     한글 경로/메시지가 섞여도 깨지지 않도록 양쪽 모두 UTF-8 로 고정한다.
     (기본값으로 두면 Python 이 cp949 로 디코딩하다 UnicodeDecodeError 가 난다.)
     """
-    header = "$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+    # A GUI started from PowerShell 7 can inherit its incompatible module path.
+    header = ('$env:PSModulePath = [IO.Path]::Combine($PSHOME, "Modules") + '
+              '[IO.Path]::PathSeparator + $env:PSModulePath\n'
+              "$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n")
     tmp = None
     try:
         # GUI background jobs and status polling share a PID. A PID-only path
