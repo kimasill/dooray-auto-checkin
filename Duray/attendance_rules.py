@@ -20,7 +20,9 @@ NEW_DEFAULTS = {
     "checkin_enabled": True, "checkout_enabled": False,
     "checkout_time": "18:00", "checkout_time_mode": "fixed",
     "random_before_minutes": 10, "random_after_minutes": 10,
+    "random_before_seconds": 0, "random_after_seconds": 0,
     "checkout_random_before_minutes": 0, "checkout_random_after_minutes": 0,
+    "checkout_random_before_seconds": 0, "checkout_random_after_seconds": 0,
     "workdays": [0, 1, 2, 3, 4], "date_overrides": {},
     "half_day_policy": "checkout_time", "am_half_checkout_time": "18:00",
     "pm_half_checkout_time": "14:00", "late_grace_minutes": 15,
@@ -87,6 +89,8 @@ def validate_config(cfg: dict, *, require_account: bool = False) -> None:
             raise ValueError("시간 모드는 fixed 또는 random이어야 합니다.")
     for key, low, high in (("random_before_minutes", 0, 720), ("random_after_minutes", 0, 720),
                           ("checkout_random_before_minutes", 0, 720), ("checkout_random_after_minutes", 0, 720),
+                          ("random_before_seconds", 0, 59), ("random_after_seconds", 0, 59),
+                          ("checkout_random_before_seconds", 0, 59), ("checkout_random_after_seconds", 0, 59),
                           ("late_grace_minutes", 0, 180), ("sync_interval_minutes", 5, 1440),
                           ("retry_count", 1, 10), ("retry_delay_seconds", 0, 600), ("timeout_ms", 1000, 120000)):
         if type(cfg.get(key)) is not int or not low <= cfg[key] <= high:
@@ -168,7 +172,9 @@ def time_bounds(cfg: dict, day: dt.date, action: str, kind: str = "work") -> tup
     prefix = "" if action == "checkin" else "checkout_"
     if special or mode == "fixed":
         return base, base
-    return max(0, base - cfg[prefix + "random_before_minutes"] * 60), min(86399, base + cfg[prefix + "random_after_minutes"] * 60)
+    before = cfg[prefix + "random_before_minutes"] * 60 + cfg.get(prefix + "random_before_seconds", 0)
+    after = cfg[prefix + "random_after_minutes"] * 60 + cfg.get(prefix + "random_after_seconds", 0)
+    return max(0, base - before), min(86399, base + after)
 
 
 @dataclass(frozen=True)
@@ -206,7 +212,8 @@ def plan_action(cfg: dict, day: dt.date, action: str, remote: dict | None = None
         if policy == "skip_checkout" and action == "checkout":
             enabled = False
     start, end = time_bounds(cfg, day, action, kind)
-    # Stable per user/date/action: restarting the worker never redraws today's time.
+    # Uniform over every second, inclusive. Stable per user/date/action: restarting
+    # the worker never redraws today's time. Zero seconds preserves legacy plans.
     seed = hashlib.sha256(f"{cfg.get('tenant_url')}|{cfg.get('login_id')}|{day}|{action}|{start}|{end}".encode()).digest()
     target = random.Random(seed).randint(start, end)
     return Plan(enabled, reason, start, end, target)

@@ -167,7 +167,35 @@ class DesktopTest(unittest.TestCase):
         self.wait()
         self.assertEqual(core.load_config()['time_mode'], 'random')
         self.assertIn('09:50:00 ~ 10:00:00', self.app.schedule_previews['checkin'].cget('text'))
-        self.assertTrue(all(str(w.cget('state')) == 'normal' for w in self.app.random_inputs['checkin']))
+        self.assertTrue(all(str(w.cget('state')) in ('normal', 'readonly') for w in self.app.random_inputs['checkin']))
+
+    def test_seconds_range_preview_dropdown_and_saved_settings(self):
+        for action in rules.ACTIONS:
+            prefix = "" if action == "checkin" else "checkout_"
+            self.app.vars[action + '_time'].set('09:55' if action == 'checkin' else '19:00')
+            self.app.vars[prefix + 'time_mode'].set(desktop_ui.MODE_LABELS['random'])
+            for suffix, value in (('before_minutes', 5), ('before_seconds', 30),
+                                  ('after_minutes', 2), ('after_seconds', 15)):
+                self.app.vars[prefix + 'random_' + suffix].set(str(value))
+            preview = self.app.schedule_previews[action].cget('text')
+            self.assertIn('09:49:30 ~ 09:57:15' if action == 'checkin' else '18:54:30 ~ 19:02:15', preview)
+            self.assertIn('1초 단위', preview)
+            seconds_dropdown = self.app.random_inputs[action][1]
+            self.assertEqual(str(seconds_dropdown.cget('state')), 'readonly')
+            self.assertEqual(tuple(map(int, seconds_dropdown.cget('values'))), tuple(range(60)))
+        self.app.save()
+        self.wait()
+        saved = core.load_config()
+        for prefix in ('', 'checkout_'):
+            self.assertEqual(saved[prefix + 'random_before_seconds'], 30)
+            self.assertEqual(saved[prefix + 'random_after_seconds'], 15)
+        for action in rules.ACTIONS:
+            prefix = "" if action == "checkin" else "checkout_"
+            self.app.vars[prefix + 'random_after_seconds'].set('60')
+            self.assertIn('0~59초', self.app.schedule_previews[action].cget('text'))
+            with self.assertRaises(ValueError):
+                self.app.collect()
+            self.app.vars[prefix + 'random_after_seconds'].set('15')
 
     def test_save_and_start_registers_task_with_current_edits(self):
         self.app.vars['checkin_time'].set('09:55')

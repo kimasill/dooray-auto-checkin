@@ -74,6 +74,7 @@ function Protect-Value($value) {
 
 Write-Host '두레이 진단 정보를 읽고 있습니다. 출퇴근 처리나 설정 변경은 하지 않습니다.' -ForegroundColor Cyan
 $keys = @('checkin_enabled','checkin_time','time_mode','random_window_minutes','random_before_minutes','random_after_minutes',
+    'random_before_seconds','random_after_seconds','checkout_random_before_seconds','checkout_random_after_seconds',
     'checkout_enabled','checkout_time','checkout_time_mode','checkout_random_before_minutes','checkout_random_after_minutes',
     'late_grace_minutes','workdays','skip_weekends','skip_korean_holidays','skip_dates','half_day_policy',
     'am_half_checkout_time','pm_half_checkout_time','dooray_sync_enabled','sync_interval_minutes',

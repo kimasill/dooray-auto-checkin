@@ -56,6 +56,58 @@ class RulesTest(unittest.TestCase):
         self.cfg.update(checkout_time="23:59", checkout_time_mode="random", checkout_random_after_minutes=60)
         self.assertEqual(self.plan("checkout").end, 86399)
 
+    def test_seconds_ranges_for_both_actions(self):
+        for action in rules.ACTIONS:
+            prefix = "" if action == "checkin" else "checkout_"
+            with self.subTest(action=action):
+                self.cfg.update({action + "_time": "12:00:00", prefix + "time_mode": "random",
+                    prefix + "random_before_minutes": 5, prefix + "random_before_seconds": 30,
+                    prefix + "random_after_minutes": 2, prefix + "random_after_seconds": 15})
+                plan = self.plan(action)
+                self.assertEqual((plan.start, plan.end), (rules.seconds("11:54:30"), rules.seconds("12:02:15")))
+                self.assertLessEqual(plan.start, plan.target)
+                self.assertLessEqual(plan.target, plan.end)
+                self.assertEqual(plan.target, self.plan(action).target)
+                self.cfg[prefix + "time_mode"] = "fixed"
+                self.assertEqual(self.plan(action).target, rules.seconds("12:00:00"))
+
+    def test_subminute_random_range_is_not_rounded_to_minutes(self):
+        for action in rules.ACTIONS:
+            prefix = "" if action == "checkin" else "checkout_"
+            self.cfg.update({action + "_time": "12:00:30", prefix + "time_mode": "random",
+                prefix + "random_before_minutes": 0, prefix + "random_before_seconds": 20,
+                prefix + "random_after_minutes": 0, prefix + "random_after_seconds": 20})
+            targets = {self.plan(action, self.day + dt.timedelta(days=i)).target for i in range(120)}
+            self.assertTrue(all(rules.seconds("12:00:10") <= t <= rules.seconds("12:00:50") for t in targets))
+            self.assertGreater(len(targets), 20)
+
+    def test_old_settings_keep_same_selected_seconds_after_upgrade(self):
+        legacy = {k: v for k, v in self.cfg.items() if not ("random_" in k and k.endswith("_seconds"))}
+        legacy.update(time_mode="random", checkout_time_mode="random", checkout_random_after_minutes=10)
+        upgraded = rules.normalize_config(legacy)
+        for action in rules.ACTIONS:
+            for i in range(30):
+                day = self.day + dt.timedelta(days=i)
+                self.assertEqual(rules.plan_action(legacy, day, action), rules.plan_action(upgraded, day, action))
+        self.assertEqual(upgraded["random_before_seconds"], 0)
+        self.assertEqual(upgraded["checkout_random_after_seconds"], 0)
+
+    def test_seconds_validation_clipping_and_date_override(self):
+        for prefix in ("", "checkout_"):
+            for direction in ("before", "after"):
+                key = prefix + "random_" + direction + "_seconds"
+                for invalid in (-1, 60, "30", True, 1.5):
+                    with self.subTest(key=key, value=invalid), self.assertRaises(ValueError):
+                        rules.validate_config({**self.cfg, key: invalid})
+        self.cfg.update(checkin_time="00:00:15", time_mode="random", random_before_minutes=0,
+                        random_before_seconds=30, checkout_time="23:59:45", checkout_time_mode="random",
+                        checkout_random_after_seconds=30)
+        self.assertEqual(self.plan().start, 0)
+        self.assertEqual(self.plan("checkout").end, 86399)
+        self.cfg["date_overrides"][self.day.isoformat()] = {"checkout_time": "15:30:17"}
+        plan = self.plan("checkout")
+        self.assertEqual((plan.start, plan.end, plan.target), (rules.seconds("15:30:17"),) * 3)
+
     def test_saturday_manual_on(self):
         day = dt.date(2026, 10, 24)
         self.assertFalse(self.plan(day=day).enabled)
@@ -228,6 +280,20 @@ class RuntimeTest(unittest.TestCase):
         self.assertTrue(runtime.due(self.cfg, self.now, "checkin", {})[0])
         self.assertFalse(runtime.due(self.cfg, self.now - dt.timedelta(minutes=1), "checkin", {})[0])
         self.assertFalse(runtime.due(self.cfg, self.now + dt.timedelta(minutes=16), "checkin", {})[0])
+
+    def test_tick_starts_at_selected_second_for_both_actions(self):
+        self.cfg.update(checkout_enabled=True)
+        for action in rules.ACTIONS:
+            prefix = "" if action == "checkin" else "checkout_"
+            self.cfg.update({prefix + "time_mode": "random", prefix + "random_before_minutes": 0,
+                            prefix + "random_after_minutes": 0, prefix + "random_before_seconds": 12,
+                            prefix + "random_after_seconds": 17})
+            plan = rules.plan_action(self.cfg, self.now.date(), action)
+            target = self.now.replace(hour=0, minute=0, second=0) + dt.timedelta(seconds=plan.target)
+            with patch.object(runtime, "do_run", return_value=0) as run:
+                self.assertNotIn(action, runtime.tick(self.cfg, now=target - dt.timedelta(seconds=1)))
+                self.assertIn(action, runtime.tick(self.cfg, now=target))
+                self.assertEqual(run.call_args.args[1].action, action)
 
     def test_state_separate_for_checkout(self):
         self.cfg["checkout_enabled"] = True

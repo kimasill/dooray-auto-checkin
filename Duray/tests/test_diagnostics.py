@@ -36,6 +36,7 @@ class DiagnosticsTest(unittest.TestCase):
     def test_collects_evidence_without_credentials_sessions_or_notes(self):
         cfg = {'login_id': 'private.login', 'tenant_url': 'https://private-company.dooray.com',
                'password': 'fake-password-DO-NOT-SHARE', 'checkin_time': '09:55', 'checkin_enabled': True, 'workdays': [0,1,2,3,4],
+               'random_before_seconds': 30, 'checkout_random_after_seconds': 15,
                'date_overrides': {'2026-10-21': {'kind': 'work', 'checkin_time': '09:30', 'note': 'PRIVATE-NOTE'}}}
         config_path = self.data / 'config.json'
         config_path.write_text(json.dumps(cfg), encoding='utf-8')
@@ -61,6 +62,8 @@ class DiagnosticsTest(unittest.TestCase):
             self.assertNotIn(secret, everything)
         settings = json.loads(files['schedule-settings.json'])
         self.assertEqual(settings['checkin_time'], '09:55')
+        self.assertEqual(settings['random_before_seconds'], 30)
+        self.assertEqual(settings['checkout_random_after_seconds'], 15)
         self.assertEqual(settings['workdays'], [0,1,2,3,4])
         self.assertIs(settings['checkin_enabled'], True)
         self.assertIs(json.loads(files['environment.json'])['dataFound'], True)

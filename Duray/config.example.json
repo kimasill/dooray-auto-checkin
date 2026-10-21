@@ -5,8 +5,12 @@
   "checkout_time_mode": "fixed",
   "random_before_minutes": 10,
   "random_after_minutes": 10,
+  "random_before_seconds": 0,
+  "random_after_seconds": 0,
   "checkout_random_before_minutes": 0,
   "checkout_random_after_minutes": 0,
+  "checkout_random_before_seconds": 0,
+  "checkout_random_after_seconds": 0,
   "workdays": [
     0,
     1,

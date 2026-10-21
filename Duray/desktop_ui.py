@@ -354,15 +354,23 @@ class App:
             self.label(row, "랜덤 범위", width=12, anchor="w").pack(side="left")
             prefix = "" if action == "checkin" else "checkout_"
             self.random_inputs[action] = []
-            for key, label in (("random_before_minutes", "분 전부터"), ("random_after_minutes", "분 후까지")):
-                widget = ttk.Spinbox(row, from_=0, to=720, textvariable=self.vars[prefix + key], width=7)
+            range_keys = []
+            for direction, label in (("before", "초 전부터"), ("after", "초 후까지")):
+                minutes_key = prefix + "random_" + direction + "_minutes"
+                seconds_key = prefix + "random_" + direction + "_seconds"
+                range_keys.extend((minutes_key, seconds_key))
+                widget = ttk.Spinbox(row, from_=0, to=720, textvariable=self.vars[minutes_key], width=5)
                 widget.pack(side="left")
                 self.random_inputs[action].append(widget)
-                self.label(row, label, color=MUTED).pack(side="left", padx=(8, 16))
+                self.label(row, "분", color=MUTED).pack(side="left", padx=(5, 8))
+                widget = ttk.Combobox(row, values=list(range(60)), textvariable=self.vars[seconds_key], width=3, state="readonly")
+                widget.pack(side="left")
+                self.random_inputs[action].append(widget)
+                self.label(row, label, color=MUTED).pack(side="left", padx=(5, 16))
             preview = self.label(box, "", size=10, color=ACCENT, justify="left", wraplength=850)
             preview.pack(anchor="w", pady=(5, 0))
             self.schedule_previews[action] = preview
-            for key in (modekey, action + "_time", prefix + "random_before_minutes", prefix + "random_after_minutes"):
+            for key in (modekey, action + "_time", *range_keys):
                 self.vars[key].trace_add("write", lambda *_args, a=action: self.update_time_preview(a))
             self.update_time_preview(action)
         box = self.card(page, "근무일과 반차")
@@ -472,24 +480,28 @@ class App:
         mode = "time_mode" if action == "checkin" else "checkout_time_mode"
         random_mode = self.vars[mode].get() == MODE_LABELS["random"]
         for widget in self.random_inputs[action]:
-            widget.configure(state="normal" if random_mode else "disabled")
+            active_state = "readonly" if isinstance(widget, ttk.Combobox) else "normal"
+            widget.configure(state=active_state if random_mode else "disabled")
         try:
             cfg = copy.deepcopy(self.cfg)
             cfg[mode] = "random" if random_mode else "fixed"
             cfg[action + "_time"] = self.vars[action + "_time"].get()
             prefix = "" if action == "checkin" else "checkout_"
-            for key in (prefix + "random_before_minutes", prefix + "random_after_minutes"):
-                cfg[key] = int(self.vars[key].get())
-                if not 0 <= cfg[key] <= 720:
-                    raise ValueError()
+            for direction in ("before", "after"):
+                for unit, maximum in (("minutes", 720), ("seconds", 59)):
+                    key = prefix + "random_" + direction + "_" + unit
+                    cfg[key] = int(self.vars[key].get())
+                    if not 0 <= cfg[key] <= maximum:
+                        raise ValueError()
             # Show the normal-day range; date-specific times take priority.
             cfg["date_overrides"] = {}
             start, end = rules.time_bounds(cfg, self.today, action)
-            text = (f"랜덤 적용 범위 {rules.clock_text(start)} ~ {rules.clock_text(end)}" if random_mode
+            text = (f"랜덤 적용 범위 {rules.clock_text(start)} ~ {rules.clock_text(end)} · 1초 단위로 무작위 선택" if random_mode
                     else f"고정 {rules.clock_text(start)} · 랜덤 범위는 적용하지 않습니다.")
             text += "\n저장 후 적용 · 날짜별 시간과 반차 퇴근 시간이 있으면 우선합니다."
+            text += "\n선택 시각에 처리를 시작하며, 접속·로그인 시간만큼 실제 기록은 늦어질 수 있습니다."
         except (ValueError, TypeError):
-            text = "유효한 시각과 0~720분 범위를 입력하세요."
+            text = "유효한 시각과 0~720분, 0~59초 범위를 입력하세요."
         self.schedule_previews[action].configure(text=text)
 
     def update_app(self):
@@ -561,8 +573,12 @@ class App:
                 keyring.set_password(core.KEYRING_SERVICE, cfg["login_id"], password)
                 cfg["login_revision"] = uuid.uuid4().hex
             core.save_config(cfg)
-            core.log.info("설정 저장: 출근 %s / 모드 %s / 앞 %s분 뒤 %s분 / 퇴근 %s", cfg['checkin_time'],
-                          cfg['time_mode'], cfg['random_before_minutes'], cfg['random_after_minutes'], cfg['checkout_time'])
+            for action in rules.ACTIONS:
+                prefix = "" if action == "checkin" else "checkout_"
+                core.log.info("설정 저장: %s %s / 모드 %s / 앞 %s분 %s초 뒤 %s분 %s초", rules.LABELS[action],
+                              cfg[action + "_time"], cfg[prefix + "time_mode"],
+                              cfg[prefix + "random_before_minutes"], cfg[prefix + "random_before_seconds"],
+                              cfg[prefix + "random_after_minutes"], cfg[prefix + "random_after_seconds"])
             st = scheduler.status()
             if st.get("exists") and st.get("state") != "Disabled" and not st.get("watcher"):
                 scheduler.enable(cfg)
