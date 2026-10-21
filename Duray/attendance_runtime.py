@@ -191,6 +191,7 @@ def run_once(cfg: dict, *, dry_run: bool, headed: bool, inspect: bool,
                 raise RuntimeError(f"{title} 버튼 문구를 확인할 수 없어 중단했습니다: {label!r}")
             before = core.slot_text(btn, action)
             if core.has_checkin_time(before):
+                core.log.info("%s 기존 두레이 기록 확인: %s · 새 클릭 없음", title, core.TIME_RE.search(before).group())
                 return f"이미 {title} 체크됨"
             if not btn.is_enabled():
                 raise RuntimeError(f"{title} 버튼이 비활성 상태이며 기록된 시각이 없습니다.")
@@ -222,6 +223,8 @@ def run_once(cfg: dict, *, dry_run: bool, headed: bool, inspect: bool,
                 page.wait_for_timeout(500)
                 target, _ = core.find_first(page, core.candidates(cfg, action + "_button", selectors))
                 if target is not None and core.has_checkin_time(core.slot_text(target, action)):
+                    core.log.info("%s 클릭 후 두레이 기록 확인: %s", title,
+                                  core.TIME_RE.search(core.slot_text(target, action)).group())
                     core.screenshot(page, "success-" + action)
                     return f"{title} 체크 성공"
             raise RuntimeError(f"{title} 클릭 후 기록된 시각을 확인하지 못했습니다. 로그와 스크린샷을 확인하세요.")
@@ -367,6 +370,9 @@ def tick(cfg: dict, *, now: dt.datetime | None = None) -> list[str]:
             continue
         args = types.SimpleNamespace(action=action, dry_run=False, inspect=False, inspect_login=False,
                                      force=False, headed=False, scheduled=True, requested_at=accepted)
+        core.log.info("%s 예약 접수: 예정 %s / 접수 %s", rules.LABELS[action],
+                      rules.clock_text(rules.plan_action(cfg, accepted.date(), action, cache).target),
+                      accepted.isoformat(timespec="seconds"))
         result = do_run(cfg, args)
         if result == 2:
             continue
@@ -380,17 +386,32 @@ def tick(cfg: dict, *, now: dt.datetime | None = None) -> list[str]:
 
 def watch() -> int:
     core.setup_logging()
-    core.log.info("출퇴근 예약 감시 시작 (한국 시간)")
     try:
         with core.execution_lock("watcher"):
+            core.log.info("출퇴근 예약 감시 시작 (한국 시간)")
+            previous = None
             while True:
                 try:
                     cfg = core.load_config()
+                    now = rules.now_kst()
+                    cache = core.load_calendar(cfg)
+                    plans = []
+                    state = core.load_state()
+                    for action in rules.ACTIONS:
+                        plan = rules.plan_action(cfg, now.date(), action, cache)
+                        status = "처리 확인됨" if state.get("last_" + action + "_date") == now.date().isoformat() else due(cfg, now, action, cache)[1] or "실행 시각 도달"
+                        plans.append((rules.LABELS[action], plan.enabled, plan.description, rules.clock_text(plan.target), status))
+                    signature = (now.date(), tuple(plans))
+                    if signature != previous:
+                        for title, enabled, description, target, status in plans:
+                            core.log.info("오늘 %s 계획: %s / 선택 시각 %s / %s", title,
+                                          description if enabled else "OFF · " + description, target, status)
+                        previous = signature
                     tick(cfg)
                     time.sleep(2)
                 except (Exception, SystemExit) as exc:
                     core.log.error("예약 확인 실패: %s", exc)
                     time.sleep(60)
-    except RuntimeError:
-        core.log.info("예약 감시가 이미 실행 중입니다.")
+    except core.OperationBusy:
+        core.log.debug("예약 감시가 이미 실행 중입니다.")
         return 0

@@ -18,7 +18,29 @@ function Run-Hidden($path, $argument) {
 function Installed-Processes {
     @(Get-Process DoorayAutoCheckin -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $destExe })
 }
-Write-Host "`n===== 두레이 자동 출퇴근 2.1.2 설치 / 업데이트 =====`n" -ForegroundColor Green
+function Stop-InstalledProcesses {
+    $processes = @(Installed-Processes)
+    $processes | Stop-Process -Force -ErrorAction SilentlyContinue
+    foreach ($process in $processes) {
+        try {
+            if (-not $process.WaitForExit(10000)) { throw '기존 앱 프로세스가 종료되지 않았습니다.' }
+        } catch [System.InvalidOperationException] { }
+    }
+}
+function Copy-BinaryWithRetry([string]$source, [string]$destination) {
+    # PyInstaller's bootloader and virus scanners can release image handles late.
+    $deadline = (Get-Date).AddSeconds(20)
+    while ($true) {
+        try {
+            Copy-Item -LiteralPath $source -Destination $destination -Force -ErrorAction Stop
+            return
+        } catch [System.IO.IOException] {
+            if ((Get-Date) -ge $deadline) { throw }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+Write-Host "`n===== 두레이 자동 출퇴근 2.1.3 설치 / 업데이트 =====`n" -ForegroundColor Green
 if (-not (Test-Path -LiteralPath $srcExe)) { throw "설치 파일과 EXE를 같은 폴더에 두세요: $here" }
 if ([IO.Path]::GetFullPath($srcExe) -eq [IO.Path]::GetFullPath($destExe)) {
     throw '설치된 bin 폴더 대신 압축을 푼 배포 폴더에서 설치를 실행하세요.'
@@ -53,7 +75,7 @@ try {
         if ($process.MainWindowHandle -ne 0) { $process.CloseMainWindow() | Out-Null }
     }
     if ($running.Count) { Start-Sleep -Seconds 2 }
-    Installed-Processes | Stop-Process -Force
+    Stop-InstalledProcesses
     Step 3 '기존 설정 백업 및 새 실행 파일 설치'
     foreach ($name in @('config.json', 'state.json', 'calendar.json')) {
         $personalFile = Join-Path $dataDir $name
@@ -63,7 +85,7 @@ try {
     $settingsCaptured = $true
     New-Item -ItemType Directory -Force -Path $destDir | Out-Null
     $binaryChanged = $true
-    Copy-Item -LiteralPath $srcExe -Destination $destExe -Force
+    Copy-BinaryWithRetry $srcExe $destExe
     if ((Get-FileHash -LiteralPath $destExe -Algorithm SHA256).Hash -ne $sourceHash) { throw '복사한 실행 파일의 무결성 검사 실패' }
     Step 4 '기존 예약 상태 복원'
     if ($wasEnabled) {
@@ -81,8 +103,8 @@ try {
     try {
         if ($binaryChanged) {
             if ($existingTask) { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue }
-            Installed-Processes | Stop-Process -Force
-            if ($hadExe) { Copy-Item -LiteralPath (Join-Path $backup 'DoorayAutoCheckin.exe') -Destination $destExe -Force }
+            Stop-InstalledProcesses
+            if ($hadExe) { Copy-BinaryWithRetry (Join-Path $backup 'DoorayAutoCheckin.exe') $destExe }
             elseif (Test-Path -LiteralPath $destExe) { Remove-Item -LiteralPath $destExe -Force }
         }
         if ($settingsCaptured -and $settingsHash -and (Test-Path -LiteralPath (Join-Path $backup 'config.json'))) {
@@ -92,6 +114,9 @@ try {
             Register-ScheduledTask -TaskName $taskName -Xml $taskXml -Force | Out-Null
             if (-not $wasEnabled) { Disable-ScheduledTask -TaskName $taskName | Out-Null }
             elseif ($wasRunning) { Start-ScheduledTask -TaskName $taskName }
+        }
+        if ($binaryChanged -and $hadExe -and -not $NoLaunch) {
+            Start-Process -FilePath $destExe -WindowStyle Hidden
         }
     } catch { Write-Warning "자동 복원 실패. 백업 위치: $backup / $($_.Exception.Message)" }
     throw "업데이트를 완료하지 못했습니다. $failureMessage / 백업: $backup"

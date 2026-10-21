@@ -156,6 +156,55 @@ class DesktopTest(unittest.TestCase):
         self.assertEqual(saved["half_day_policy"], "checkout_time")
         scheduler.enable.assert_not_called()
 
+    def test_fixed_mode_disables_random_fields_and_shows_actual_range(self):
+        self.app.vars['checkin_time'].set('09:55')
+        self.app.vars['random_before_minutes'].set('5')
+        self.app.vars['random_after_minutes'].set('5')
+        self.assertTrue(all(str(w.cget('state')) == 'disabled' for w in self.app.random_inputs['checkin']))
+        self.assertIn('랜덤 범위는 적용하지 않습니다', self.app.schedule_previews['checkin'].cget('text'))
+        self.app.vars['time_mode'].set(desktop_ui.MODE_LABELS['random'])
+        self.app.save()
+        self.wait()
+        self.assertEqual(core.load_config()['time_mode'], 'random')
+        self.assertIn('09:50:00 ~ 10:00:00', self.app.schedule_previews['checkin'].cget('text'))
+        self.assertTrue(all(str(w.cget('state')) == 'normal' for w in self.app.random_inputs['checkin']))
+
+    def test_save_and_start_registers_task_with_current_edits(self):
+        self.app.vars['checkin_time'].set('09:55')
+        self.app.vars['time_mode'].set(desktop_ui.MODE_LABELS['random'])
+        self.app.vars['random_before_minutes'].set('5')
+        self.app.vars['random_after_minutes'].set('5')
+        self.app.start_schedule()
+        self.wait()
+        scheduler.enable.assert_called_once()
+        saved = scheduler.enable.call_args.args[0]
+        self.assertEqual(saved['checkin_time'], '09:55')
+        self.assertEqual(saved['time_mode'], 'random')
+        self.assertEqual(core.load_config()['random_before_minutes'], 5)
+
+    def test_dashboard_does_not_claim_task_registration_is_running(self):
+        self.app.apply_status({'exists': False})
+        self.assertEqual(self.app.summary['checkin'][0].cget('text'), '시작 필요')
+        self.app.apply_status({'exists': True, 'state':'Ready', 'watcher':True, 'worker_running':False})
+        self.assertIn('시작 필요', self.app.badge.cget('text'))
+        self.app.apply_status({'exists': True, 'state':'Ready', 'watcher':True, 'worker_running':True})
+        self.assertIn('실행 중', self.app.badge.cget('text'))
+        self.assertNotEqual(self.app.summary['checkin'][0].cget('text'), '시작 필요')
+
+    def test_update_check_requires_install_button_before_downloading(self):
+        release = desktop_ui.updater.Release('2.1.4', '', '', 1, '')
+        with patch.object(desktop_ui.updater, 'check_latest', return_value=release), \
+                patch.object(desktop_ui.updater, 'prepare_update') as download, \
+                patch.object(desktop_ui.updater, 'launch_installer') as install:
+            self.app.update_app()
+            self.wait()
+            download.assert_not_called()
+            self.assertIn('다운로드 및 설치', self.app.update_button.cget('text'))
+            self.app.update_app()
+            self.wait()
+            download.assert_called_once()
+            install.assert_called_once()
+
     def test_calendar_save_and_reset(self):
         self.app.day_vars["kind"].set("오후 반차")
         self.app.day_vars["checkout_time"].set("15:20")

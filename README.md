@@ -1,8 +1,8 @@
 # 두레이 자동 출퇴근
 
-Windows에서 Dooray 출퇴근 예약, 근무 달력, 개인 근태를 관리하는 데스크톱 프로그램입니다. 현재 버전은 **2.1.2**입니다.
+Windows에서 Dooray 출퇴근 예약, 근무 달력, 개인 근태를 관리하는 데스크톱 프로그램입니다. 현재 버전은 **2.1.3**입니다.
 
-[Windows 설치 파일 다운로드](https://github.com/kimasill/dooray-auto-checkin/releases/download/v2.1.2/DoorayAutoCheckin-v2.1.2-windows.zip) · [설치 방법](#설치와-업데이트) · [연결 문제 해결](#연결이-안-될-때)
+[Windows 설치 파일 다운로드](https://github.com/kimasill/dooray-auto-checkin/releases/download/v2.1.3/DoorayAutoCheckin-v2.1.3-windows.zip) · [설치 방법](#설치와-업데이트) · [연결 문제 해결](#연결이-안-될-때)
 
 ## 화면 미리보기
 
@@ -22,7 +22,11 @@ Windows에서 Dooray 출퇴근 예약, 근무 달력, 개인 근태를 관리하
 
 ## 설치와 업데이트
 
-1. [최신 릴리스](https://github.com/kimasill/dooray-auto-checkin/releases/latest)에서 `DoorayAutoCheckin-v2.1.2-windows.zip`을 받습니다.
+**2.1.3부터 앱 안에서 업데이트할 수 있습니다.** 연결 · 설정 → **업데이트 확인** → **다운로드 및 설치**를 누르세요. 공식 GitHub 배포본의 SHA-256과 파일 구성을 검사한 뒤 설치하고 앱을 다시 엽니다. 기존 계정·비밀번호·시간·달력·예약 ON/OFF는 유지하며, 실패 시 기존 버전과 예약을 복원합니다. 이전 버전은 아래 ZIP으로 한 번 업데이트해주세요.
+
+**시간 설정만 저장하면 자동 예약은 시작되지 않습니다.** 하단의 **저장하고 자동 예약 시작**을 누르고 상단에 **자동 예약 실행 중**이 표시되는지 확인하세요. Windows 작업 등록과 실제 감시 프로세스 실행을 모두 확인합니다. 고정 시각에서는 랜덤 입력을 잠그며, 랜덤 범위를 선택하면 적용되는 시간 범위를 보여줍니다. 예: 09:55, 앞뒤 5분 → **09:50~10:00** 중 하루 한 시각을 선택하며 대시보드에 오늘의 선택 시각을 표시합니다.
+
+1. [최신 릴리스](https://github.com/kimasill/dooray-auto-checkin/releases/latest)에서 `DoorayAutoCheckin-v2.1.3-windows.zip`을 받습니다.
 2. 압축을 풀고 `설치.bat`을 실행합니다.
 3. 프로그램의 **연결 · 설정**에서 회사 두레이 주소, 로그인 ID와 비밀번호를 입력하고 **저장하고 연결 확인**을 누릅니다.
 4. **시간 · 예약**에서 출근·퇴근 시각을 설정하고, 대시보드에서 **자동 예약 켜기**를 누릅니다.
@@ -78,7 +82,7 @@ Windows에서 Dooray 출퇴근 예약, 근무 달력, 개인 근태를 관리하
 
 ## 다른 PC에서 예약이 실행되지 않았을 때
 
-실패한 **그 PC에서, 앱을 사용한 Windows 계정으로** [진단 도구 ZIP](https://github.com/kimasill/dooray-auto-checkin/releases/download/v2.1.2/Dooray-diagnostics-tool.zip)을 내려받아 압축을 풀고 **진단로그수집.bat**을 실행하세요. 바탕화면에 생성되는 `Dooray-diagnostics-날짜-시간-식별자.zip`을 분석 담당자에게 전달하면 됩니다. 실패한 날짜와 기대한 예약 시각도 함께 알려주세요.
+실패한 **그 PC에서, 앱을 사용한 Windows 계정으로** [진단 도구 ZIP](https://github.com/kimasill/dooray-auto-checkin/releases/download/v2.1.3/Dooray-diagnostics-tool.zip)을 내려받아 압축을 풀고 **진단로그수집.bat**을 실행하세요. 바탕화면에 생성되는 `Dooray-diagnostics-날짜-시간-식별자.zip`을 분석 담당자에게 전달하면 됩니다. 실패한 날짜와 기대한 예약 시각도 함께 알려주세요.
 
 예약 설정, 최근 실행 로그, 결과 상태, 앱 버전, Windows 작업 상태와 절전·부팅 이벤트를 모읍니다. 비밀번호 저장소·로그인 세션·스크린샷·원본 설정 파일은 수집하지 않으며 계정 ID·회사 URL과 날짜별 메모를 제외합니다. 출퇴근 처리, 설정 변경, 자동 전송은 하지 않습니다. 일부 Windows 이벤트를 읽을 수 없어도 나머지 로그는 수집됩니다.
 

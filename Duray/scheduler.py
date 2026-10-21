@@ -12,11 +12,33 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 TASK_NAME = "DoorayCheckin"
 
 CREATE_NO_WINDOW = 0x08000000
+
+
+def watcher_running() -> bool:
+    """Probe the OS lock, not stale metadata or Task Scheduler's registration."""
+    import msvcrt
+    import dooray_checkin as core
+    path = core.DATA_DIR / 'watcher.lock'
+    if not path.exists():
+        return False
+    try:
+        with path.open('r+b') as handle:
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                if exc.errno in (13, 36):
+                    return True
+                raise
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return False
+    except FileNotFoundError:
+        return False
 
 
 # ----------------------------------------------------------------------------
@@ -92,7 +114,9 @@ def status() -> dict:
     if rc != 0 or not out:
         return {"exists": False, "error": err or f"rc={rc}"}
     try:
-        return json.loads(out)
+        result = json.loads(out)
+        result['worker_running'] = watcher_running()
+        return result
     except json.JSONDecodeError:
         return {"exists": False, "error": out[:200]}
 
@@ -125,6 +149,13 @@ Start-ScheduledTask -TaskName {_ps_quote(TASK_NAME)}
     rc, out, err = _run_powershell(script)
     if rc != 0 or "OK" not in out:
         raise RuntimeError(f"예약 등록 실패: {err or out or f'rc={rc}'}")
+    deadline = time.monotonic() + 25
+    while not watcher_running():
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Windows 예약은 등록됐지만 감시 프로그램이 시작되지 않았습니다. 실행 기록을 확인하고 예약 다시 시작을 누르세요.")
+        time.sleep(.25)
+    import dooray_checkin as core
+    core.log.info("자동 예약 시작 확인: Windows 등록 완료 / 감시 프로그램 실행 중")
 
 
 def disable() -> None:

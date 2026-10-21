@@ -16,6 +16,8 @@ import attendance_rules as rules
 import attendance_runtime as runtime
 import dooray_checkin as core
 import scheduler
+import updater
+from app_version import VERSION
 from ui_widgets import TimePicker, MonthCanvas, CheckButton, day_display, LEAVE_COLORS
 
 BG, CARD, INK, MUTED = "#F7F8FB", "#FFFFFF", "#242A35", "#7A8495"
@@ -48,6 +50,9 @@ class App:
         self.task = {}
         self.buttons = []
         self.time_pickers = {}
+        self.random_inputs = {}
+        self.schedule_previews = {}
+        self.update_release = None
         self.display_plans = tk.BooleanVar(value=True)
         self.pages = {}
         self.nav_buttons = {}
@@ -56,7 +61,7 @@ class App:
         self.selected = self.today
         self.month = self.today.replace(day=1)
         self.overrides = copy.deepcopy(self.cfg["date_overrides"])
-        root.title(TITLE + "  ·  2.1.2")
+        root.title(TITLE + "  ·  " + VERSION)
         root.geometry("1380x920")
         root.minsize(1180, 800)
         root.configure(bg=BG)
@@ -88,7 +93,7 @@ class App:
                                cursor="hand2", command=lambda k=key: self.show(k))
             button.pack(fill="x", padx=10, pady=3)
             self.nav_buttons[key] = button
-        tk.Label(side, text="개인 자동화 도구\n버전 2.1.2 · 한국 시간", justify="left", bg=NAV, fg=MUTED, font=("Malgun Gothic", 9)).pack(side="bottom", anchor="w", padx=25, pady=25)
+        tk.Label(side, text=f"개인 자동화 도구\n버전 {VERSION} · 한국 시간", justify="left", bg=NAV, fg=MUTED, font=("Malgun Gothic", 9)).pack(side="bottom", anchor="w", padx=25, pady=25)
         main = tk.Frame(root, bg=BG)
         main.pack(side="left", fill="both", expand=True)
         header = tk.Frame(main, bg=CARD, height=66)
@@ -102,7 +107,8 @@ class App:
         footer.pack(side="bottom", fill="x")
         self.feedback = tk.Label(footer, text="설정을 바꾼 뒤 저장하세요.", bg=CARD, fg=MUTED)
         self.feedback.pack(side="left", padx=25, pady=16)
-        self.button(footer, "설정 저장", self.save, primary=True).pack(side="right", padx=25, pady=10)
+        self.button(footer, "저장하고 자동 예약 시작", self.start_schedule, primary=True).pack(side="right", padx=(8, 20), pady=10)
+        self.button(footer, "설정만 저장", self.save).pack(side="right", pady=10)
         self.content = tk.Frame(main, bg=BG)
         self.content.pack(fill="both", expand=True, padx=22, pady=20)
         for key in self.nav_buttons:
@@ -143,6 +149,8 @@ class App:
         style.configure("Time.TCombobox", padding=(5, 7), font=("Segoe UI", 11))
         style.configure("TCheckbutton", background=CARD, foreground=INK, padding=(0, 5))
         style.map("TCheckbutton", background=[("active", CARD)])
+        style.configure("TRadiobutton", background=CARD, foreground=INK, padding=(0, 5))
+        style.map("TRadiobutton", background=[("active", CARD)])
 
     def label(self, parent, text, *, size=10, bold=False, color=INK, **kw):
         return tk.Label(parent, text=text, bg=parent.cget("bg"), fg=color,
@@ -325,27 +333,38 @@ class App:
 
     def build_schedule(self):
         page = self.scroll_page("schedule")
+        self.schedule_status = self.label(page, "자동 예약 상태 확인 중", color=MUTED, justify="left", wraplength=850)
+        self.schedule_status.pack(anchor="w", pady=(0, 12))
         for action in rules.ACTIONS:
             title = rules.LABELS[action]
             box = self.card(page, title + " 예약")
             box.pack(fill="x", pady=(0, 14))
-            CheckButton(box, text="자동 " + title + " 사용", variable=self.vars[action + "_enabled"]).pack(anchor="w")
+            CheckButton(box, text=title + "을 자동 예약에 포함", variable=self.vars[action + "_enabled"]).pack(anchor="w")
             row = tk.Frame(box, bg=CARD)
             row.pack(fill="x", pady=6)
             self.label(row, "기준 시각", width=12, anchor="w").pack(side="left")
             self.time_pickers[action + "_time"] = TimePicker(row, self.vars[action + "_time"])
             self.time_pickers[action + "_time"].pack(side="left")
             modekey = "time_mode" if action == "checkin" else "checkout_time_mode"
-            ttk.Combobox(row, textvariable=self.vars[modekey], values=list(MODE_LABELS.values()), state="readonly", width=14).pack(side="left", padx=12)
+            for label in MODE_LABELS.values():
+                ttk.Radiobutton(row, text=label, value=label, variable=self.vars[modekey]).pack(side="left", padx=(14, 0))
             self.label(row, "24시간 기준", size=9, color=MUTED).pack(side="left")
             row = tk.Frame(box, bg=CARD)
             row.pack(fill="x", pady=6)
             self.label(row, "랜덤 범위", width=12, anchor="w").pack(side="left")
             prefix = "" if action == "checkin" else "checkout_"
+            self.random_inputs[action] = []
             for key, label in (("random_before_minutes", "분 전부터"), ("random_after_minutes", "분 후까지")):
-                ttk.Spinbox(row, from_=0, to=720, textvariable=self.vars[prefix + key], width=7).pack(side="left")
+                widget = ttk.Spinbox(row, from_=0, to=720, textvariable=self.vars[prefix + key], width=7)
+                widget.pack(side="left")
+                self.random_inputs[action].append(widget)
                 self.label(row, label, color=MUTED).pack(side="left", padx=(8, 16))
-            self.label(box, "0~720분 · 이전/이후를 각각 설정 · 자정을 넘는 범위는 당일 안으로 제한됩니다.", size=9, color=MUTED).pack(anchor="w", pady=(5, 0))
+            preview = self.label(box, "", size=10, color=ACCENT, justify="left", wraplength=850)
+            preview.pack(anchor="w", pady=(5, 0))
+            self.schedule_previews[action] = preview
+            for key in (modekey, action + "_time", prefix + "random_before_minutes", prefix + "random_after_minutes"):
+                self.vars[key].trace_add("write", lambda *_args, a=action: self.update_time_preview(a))
+            self.update_time_preview(action)
         box = self.card(page, "근무일과 반차")
         box.pack(fill="x", pady=(0, 14))
         row = tk.Frame(box, bg=CARD)
@@ -368,6 +387,13 @@ class App:
 
     def build_settings(self):
         page = self.scroll_page("settings")
+        update_box = self.card(page, "앱 업데이트")
+        update_box.pack(fill="x", pady=(0, 14))
+        self.update_status = self.label(update_box, f"현재 v{VERSION} · 업데이트해도 기존 계정·시간·달력 설정을 유지합니다.",
+                                        color=MUTED, justify="left", wraplength=760)
+        self.update_status.pack(anchor="w")
+        self.update_button = self.button(update_box, "업데이트 확인", self.update_app)
+        self.update_button.pack(anchor="w", pady=(10, 0))
         box = self.card(page, "두레이 계정")
         box.pack(fill="x", pady=(0, 14))
         self.field(box, "회사 두레이 주소", "tenant_url")
@@ -442,6 +468,58 @@ class App:
             self.button(row, name, lambda p=path: open_folder(p)).pack(side="left", padx=(0, 8))
         self.button(row, "최근 로그 불러오기", self.load_logs).pack(side="right")
 
+    def update_time_preview(self, action):
+        mode = "time_mode" if action == "checkin" else "checkout_time_mode"
+        random_mode = self.vars[mode].get() == MODE_LABELS["random"]
+        for widget in self.random_inputs[action]:
+            widget.configure(state="normal" if random_mode else "disabled")
+        try:
+            cfg = copy.deepcopy(self.cfg)
+            cfg[mode] = "random" if random_mode else "fixed"
+            cfg[action + "_time"] = self.vars[action + "_time"].get()
+            prefix = "" if action == "checkin" else "checkout_"
+            for key in (prefix + "random_before_minutes", prefix + "random_after_minutes"):
+                cfg[key] = int(self.vars[key].get())
+                if not 0 <= cfg[key] <= 720:
+                    raise ValueError()
+            # Show the normal-day range; date-specific times take priority.
+            cfg["date_overrides"] = {}
+            start, end = rules.time_bounds(cfg, self.today, action)
+            text = (f"랜덤 적용 범위 {rules.clock_text(start)} ~ {rules.clock_text(end)}" if random_mode
+                    else f"고정 {rules.clock_text(start)} · 랜덤 범위는 적용하지 않습니다.")
+            text += "\n저장 후 적용 · 날짜별 시간과 반차 퇴근 시간이 있으면 우선합니다."
+        except (ValueError, TypeError):
+            text = "유효한 시각과 0~720분 범위를 입력하세요."
+        self.schedule_previews[action].configure(text=text)
+
+    def update_app(self):
+        def failed(error):
+            self.update_status.configure(text="업데이트 실패 · " + error, fg="#B25545")
+        if self.update_release is None:
+            def checked(release):
+                self.update_release = release
+                if release:
+                    self.update_status.configure(text=f"v{release.version} 사용 가능 · 아래 버튼을 누르면 검증 후 설치하고 앱을 다시 엽니다.\n계정·시간·달력·자동 예약 ON/OFF를 보존합니다.", fg=ACCENT)
+                    self.update_button.configure(text=f"v{release.version} 다운로드 및 설치")
+                else:
+                    self.update_status.configure(text=f"최신 버전입니다 · v{VERSION}", fg=ACCENT)
+            self.background("업데이트 확인", updater.check_latest, checked, failed=failed)
+        else:
+            def prepared(folder):
+                try:
+                    process = updater.launch_installer(folder)
+                    self.update_button.configure(state="disabled")
+                    self.update_status.configure(text="설치 중 · 설치 프로그램이 앱을 종료한 뒤 새 버전을 엽니다. 실패 내용은 업데이트 폴더의 install.log에 저장됩니다.", fg=ACCENT)
+                    def monitor():
+                        result = process.wait()
+                        if result:
+                            self.events.put(("update_failed", f"설치가 완료되지 않았습니다 (종료 코드 {result}).\n{folder / 'install.log'}에서 오류를 확인한 뒤 다시 시도하세요."))
+                    threading.Thread(target=monitor, daemon=True).start()
+                except Exception as exc:
+                    failed(str(exc))
+            self.background("업데이트 다운로드", lambda: updater.prepare_update(self.update_release, core.DATA_DIR / "updates",
+                progress=lambda text: self.events.put(("update_progress", text))), prepared, failed=failed)
+
     def collect(self):
         cfg = copy.deepcopy(self.cfg)
         for key, var in self.vars.items():
@@ -483,6 +561,8 @@ class App:
                 keyring.set_password(core.KEYRING_SERVICE, cfg["login_id"], password)
                 cfg["login_revision"] = uuid.uuid4().hex
             core.save_config(cfg)
+            core.log.info("설정 저장: 출근 %s / 모드 %s / 앞 %s분 뒤 %s분 / 퇴근 %s", cfg['checkin_time'],
+                          cfg['time_mode'], cfg['random_before_minutes'], cfg['random_after_minutes'], cfg['checkout_time'])
             st = scheduler.status()
             if st.get("exists") and st.get("state") != "Disabled" and not st.get("watcher"):
                 scheduler.enable(cfg)
@@ -490,7 +570,8 @@ class App:
         def done(value):
             self.cfg = value
             self.vars["password"].set("")
-            self.feedback.configure(text="설정을 저장했습니다.", fg=ACCENT)
+            on = self.task.get("exists") and self.task.get("state") != "Disabled"
+            self.feedback.configure(text="설정 저장 완료" if on else "설정 저장 완료 · 자동 예약은 아직 OFF입니다.", fg=ACCENT if on else "#B25545")
             self.cache = core.load_calendar(self.cfg)
             self.refresh_summary()
             self.render_calendar()
@@ -507,6 +588,11 @@ class App:
         if on:
             self.background("자동 예약 끄기", scheduler.disable)
             return
+        self.start_schedule()
+
+    def start_schedule(self):
+        if self.busy:
+            return
         def enable():
             try:
                 rules.validate_config(self.cfg, require_account=True)
@@ -515,7 +601,9 @@ class App:
             except ValueError as exc:
                 messagebox.showerror(TITLE, str(exc), parent=self.root)
                 return
-            self.background("자동 예약 켜기", lambda: scheduler.enable(self.cfg))
+            def started(_):
+                self.feedback.configure(text="자동 예약 시작 확인 · 오늘의 선택 시각을 확인하세요.", fg=ACCENT)
+            self.background("자동 예약 시작", lambda: scheduler.enable(self.cfg), started)
         self.save(after=enable)
 
     def background(self, label, fn, done=None, quiet=False, failed=None):
@@ -527,7 +615,7 @@ class App:
         for button in self.buttons:
             button.configure(state="disabled")
         self.feedback.configure(text=label + "…", fg=MUTED)
-        self.events.put(("log", label + " 시작"))
+        core.log.info("%s 시작", label)
         def worker():
             try:
                 value = fn()
@@ -741,8 +829,13 @@ class App:
         self.date_label.configure(text=f"{today:%Y년 %m월 %d일} {'월화수목금토일'[today.weekday()]}요일  ·  Asia/Seoul")
         for action, (value, detail) in self.summary.items():
             plan = rules.plan_action(self.cfg, today, action, self.cache)
-            value.configure(text=rules.clock_text(plan.target) if plan.enabled else "OFF", fg=ACCENT if plan.enabled else MUTED)
+            running = self.task.get("exists") and self.task.get("state") != "Disabled" and self.task.get("worker_running")
+            value.configure(text=(rules.clock_text(plan.target) if running else "시작 필요") if plan.enabled else "OFF", fg=ACCENT if running and plan.enabled else MUTED)
             text = (plan.description + "\n" if plan.enabled else "") + plan.reason
+            if plan.enabled:
+                text += "\n오늘 선택 시각 " + rules.clock_text(plan.target)
+                if not running:
+                    text += "\n‘저장하고 자동 예약 시작’을 눌러주세요."
             if state.get("last_" + action + "_date") == today.isoformat():
                 text += "\n오늘 " + rules.LABELS[action] + " 처리 확인됨"
             elif state.get("last_" + action + "_error") and state.get(
@@ -787,16 +880,21 @@ class App:
         self.status_pending = False
         self.task = st
         on = st.get("exists") and st.get("state") != "Disabled"
+        running = on and st.get("worker_running")
         self.toggle.configure(text="자동 예약 끄기" if on else "자동 예약 켜기")
-        self.badge.configure(text="예약 상태 확인 실패" if st.get("error") else ("● 자동 예약 ON" if on else "○ 자동 예약 OFF"),
-                             fg=ACCENT if on else MUTED, bg=SOFT if on else BG)
-        text = "창을 닫아도 Windows 예약이 유지됩니다." if on else "자동 예약이 꺼져 있습니다. 시간과 달력을 확인한 뒤 켜세요."
+        self.badge.configure(text="예약 상태 확인 실패" if st.get("error") else ("● 자동 예약 실행 중" if running else "예약 시작 필요" if on else "○ 자동 예약 OFF"),
+                             fg=ACCENT if running else "#B25545", bg=SOFT if running else BG)
+        text = "예약 감시 실행 중 · 창을 닫아도 자동 예약이 유지됩니다." if running else "자동 예약이 실행되지 않습니다. ‘저장하고 자동 예약 시작’을 눌러주세요."
+        if not on:
+            text += "\n출근·퇴근 포함 체크와 시간 저장만으로는 자동 실행이 시작되지 않습니다."
         if on and not st.get("watcher"):
             text += "\n기존 예약입니다. 설정을 저장하면 달력 기반 예약으로 전환됩니다."
         if st.get("error"):
             text = "Windows 예약 상태 조회 실패: " + st["error"]
         text += "\nChromium " + ("준비 완료" if core.chromium_ready() else "설치 필요 · 연결 · 설정에서 설치하세요.")
         self.task_text.configure(text=text)
+        self.schedule_status.configure(text=text, fg=ACCENT if running else "#B25545")
+        self.refresh_summary()
 
     def load_logs(self):
         path = core.LOG_DIR / "checkin.log"
@@ -822,13 +920,18 @@ class App:
                     self.action_status.configure(text=value, fg=MUTED)
                     self.feedback.configure(text=value, fg=MUTED)
                     self.events.put(("log", value))
+                elif kind == "update_progress":
+                    self.update_status.configure(text=value, fg=ACCENT)
+                elif kind == "update_failed":
+                    self.update_status.configure(text=value, fg="#B25545")
+                    self.update_button.configure(state="normal")
                 elif kind == "done":
                     done, result, error, label = value
                     self.busy = False
                     for button in self.buttons:
                         button.configure(state="normal")
                     self.feedback.configure(text=label + (" 실패 · 실행 기록 확인" if error else " 완료"), fg="#B25545" if error else ACCENT)
-                    self.events.put(("log", label + (": " + error if error else " 완료")))
+                    (core.log.error if error else core.log.info)("%s", label + (": " + error if error else " 완료"))
                     if error:
                         self.cache = core.load_calendar(self.cfg)
                         if self.failed_work:

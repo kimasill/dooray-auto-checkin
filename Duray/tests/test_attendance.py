@@ -376,7 +376,8 @@ class RuntimeTest(unittest.TestCase):
 
 class SchedulerTest(unittest.TestCase):
     def test_registration_uses_watcher_and_logon_and_quoted_paths(self):
-        with patch.object(scheduler, "_run_powershell", return_value=(0, "OK", "")) as run:
+        with patch.object(scheduler, "_run_powershell", return_value=(0, "OK", "")) as run, \
+                patch.object(scheduler, "watcher_running", return_value=True):
             scheduler.enable(config())
         source = run.call_args.args[0]
         self.assertIn("--watch", source)
@@ -395,6 +396,13 @@ class SchedulerTest(unittest.TestCase):
         with patch.object(scheduler, "_run_powershell", return_value=(1, "", "denied")):
             self.assertEqual(scheduler.status()["error"], "denied")
             with self.assertRaises(RuntimeError):
+                scheduler.enable()
+
+    def test_registered_but_not_started_is_failure(self):
+        with patch.object(scheduler, '_run_powershell', return_value=(0, 'OK', '')), \
+                patch.object(scheduler, 'watcher_running', return_value=False), \
+                patch.object(scheduler.time, 'monotonic', side_effect=[0, 26]):
+            with self.assertRaisesRegex(RuntimeError, '시작되지 않았습니다'):
                 scheduler.enable()
 
 

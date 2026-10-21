@@ -53,6 +53,8 @@ function Save-Json([string]$name, $value) {
 function Protect-Value($value) {
     if ($null -eq $value) { return $null }
     if ($value -is [string]) { return Protect-Text $value }
+    # Pipeline-wrapped booleans/numbers can also satisfy -is [PSCustomObject].
+    if ($value -is [System.ValueType]) { return $value.PSObject.BaseObject }
     if ($value -is [System.Collections.IDictionary]) {
         $safe = [ordered]@{}
         foreach ($key in $value.Keys) { $safe[$key] = Protect-Value $value[$key] }
@@ -115,7 +117,7 @@ foreach ($name in @('checkin.log','checkin.log.1','checkin.log.2')) {
     }
 }
 
-$environment = [ordered]@{ collectedAt = (Get-Date).ToString('o'); collectorVersion = 1; dataFound = (Test-Path -LiteralPath $configPath) }
+$environment = [ordered]@{ collectedAt = (Get-Date).ToString('o'); collectorVersion = 2; dataFound = (Test-Path -LiteralPath $configPath) }
 if (-not $SkipSystemInfo) {
     try {
         $os = Get-CimInstance Win32_OperatingSystem
