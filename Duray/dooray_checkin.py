@@ -203,7 +203,7 @@ def notify_failure(message: str) -> None:
 # ----------------------------------------------------------------------------
 DEFAULT_CONFIG = {
     "tenant_url": "https://YOURCOMPANY.dooray.com",
-    "attendance_path": "/home",
+    "attendance_path": rules.ATTENDANCE_PATH,
     "login_id": "",
     "checkin_time": "09:00",
     # "fixed"  = checkin_time 그대로
@@ -579,7 +579,7 @@ def do_setup() -> int:
 
     cfg["tenant_url"] = ask("두레이 주소 (예: https://mycompany.dooray.com)",
                             cfg["tenant_url"]).rstrip("/")
-    cfg["attendance_path"] = ask("근태 페이지 경로", cfg["attendance_path"]) or "/home"
+    cfg["attendance_path"] = ask("근태 페이지 경로", cfg["attendance_path"]) or rules.ATTENDANCE_PATH
     cfg["login_id"] = ask("로그인 ID (이메일)", cfg["login_id"])
     cfg["checkin_time"] = ask("출근 체크 시각 (HH:MM)", cfg["checkin_time"])
 

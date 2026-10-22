@@ -100,7 +100,7 @@ class LoginBrowserTest(unittest.TestCase):
         self.pw_mock = patch.object(core, "get_password", return_value="fixture-secret").start()
         self.addCleanup(patch.stopall)
 
-    def load(self, body, script="", url="https://fixture.dooray.com/home"):
+    def load(self, body, script="", url="https://fixture.dooray.com" + rules.ATTENDANCE_PATH):
         html = f"<meta charset='utf-8'><body>{body}<script>window.mutations=0; window.submits=0; window.result={SUCCESS!r}; {script}</script></body>"
         self.ctx.route("**/*", lambda r: r.fulfill(body=html, content_type="text/html"))
         self.page.goto(url)
@@ -124,7 +124,7 @@ class LoginBrowserTest(unittest.TestCase):
             visits.append(path)
             if path == '/login':
                 body='<input id="loginId"><input type="password"><button type="submit" onclick="location.href=\'/mail\'">로그인</button>'
-            elif path == '/home':
+            elif path == rules.ATTENDANCE_PATH:
                 body=SUCCESS
             else:
                 body='<main><h1>메일</h1><input type="text" placeholder="검색"></main>'
@@ -132,14 +132,14 @@ class LoginBrowserTest(unittest.TestCase):
         self.ctx.route('**/*',route)
         self.page.goto('https://fixture.dooray.com/login')
         auth.ensure_logged_in(self.page,self.cfg)
-        self.assertEqual(self.page.url,'https://fixture.dooray.com/home')
-        self.assertEqual(visits.count('/home'),1)
+        self.assertEqual(self.page.url,'https://fixture.dooray.com'+rules.ATTENDANCE_PATH)
+        self.assertEqual(visits.count(rules.ATTENDANCE_PATH),1)
         self.pw_mock.assert_called_once()
 
     def test_manual_logged_in_project_page_recovers_without_typing_or_clicking(self):
         visits=[]
         self.ctx.route('**/*',lambda r: (visits.append(r.request.url),r.fulfill(content_type='text/html; charset=utf-8',
-            body=SUCCESS if r.request.url.endswith('/home') else '<h1>Project</h1><input type="text">')))
+            body=SUCCESS if r.request.url.endswith(rules.ATTENDANCE_PATH) else '<h1>Project</h1><input type="text">')))
         self.page.goto('https://fixture.dooray.com/project')
         cancel=threading.Event()
         timer=threading.Timer(8,cancel.set); timer.start()
@@ -147,7 +147,7 @@ class LoginBrowserTest(unittest.TestCase):
             auth.ensure_logged_in(self.page,self.cfg,manual=True,cancel=cancel)
         finally:
             timer.cancel()
-        self.assertEqual(self.page.url,'https://fixture.dooray.com/home')
+        self.assertEqual(self.page.url,'https://fixture.dooray.com'+rules.ATTENDANCE_PATH)
         self.assertEqual(len(visits),2)
         self.pw_mock.assert_not_called()
 
@@ -268,7 +268,7 @@ class ConnectionBrowserTest(unittest.TestCase):
             kw.pop("channel", None)
             ctx = launch(browser_type, executable_path=BROWSER, timeout=15000, **kw)
             ctx.expose_function("mutation", lambda: mutations.append(True))
-            ctx.route("**/*", lambda r: r.fulfill(content_type="text/html; charset=utf-8", body=calendar if "register-month" in r.request.url else
+            ctx.route("**/*", lambda r: r.fulfill(content_type="text/html; charset=utf-8", body=calendar +
                       "<button onclick='mutation()'>출근하기</button><button onclick='mutation()'>퇴근하기</button>"))
             return ctx
         with tempfile.TemporaryDirectory(dir=OUTPUT) as temp, patch.object(core, "PROFILE_DIR", Path(temp) / "profile"), \
@@ -286,7 +286,7 @@ class ConnectionBrowserTest(unittest.TestCase):
         for message in progress:
             self.assertIn(message, recorded)
         self.assertIn('두레이 첫 응답: HTTP 200',recorded)
-        self.assertIn('출퇴근 경로=home',recorded)
+        self.assertIn('출퇴근 경로=calendar',recorded)
 
 
 if __name__ == "__main__":

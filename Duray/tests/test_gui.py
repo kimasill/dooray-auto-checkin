@@ -83,6 +83,18 @@ class DesktopTest(unittest.TestCase):
         self.wait()
         self.assertEqual(core.load_config()["checkin_time"], "09:35:42")
 
+    def test_connect_saves_and_displays_corrected_legacy_home_path(self):
+        self.app.vars['attendance_path'].set('/home')
+        with patch.object(desktop_ui.runtime, 'check_connection', return_value={'ok': True, 'message': '연결 완료'}) as connect:
+            self.app.connect()
+            self.wait()
+        saved = json.loads(core.CONFIG_PATH.read_text(encoding='utf-8'))
+        self.assertEqual(saved['attendance_path'], rules.ATTENDANCE_PATH)
+        self.assertEqual(self.app.vars['attendance_path'].get(), rules.ATTENDANCE_PATH)
+        self.assertEqual(connect.call_args.args[0]['attendance_path'], rules.ATTENDANCE_PATH)
+        self.assertFalse(self.app.account_dirty())
+        self.assertEqual(self.app.connection_status.cget('text'), '연결 완료')
+
     def test_date_time_can_inherit_or_use_dropdown(self):
         picker = self.app.time_pickers["day_checkout_time"]
         self.assertTrue(picker.inherit.get())

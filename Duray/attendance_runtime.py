@@ -89,6 +89,10 @@ def run_once(cfg: dict, *, dry_run: bool, headed: bool, inspect: bool,
              scheduled: bool = False, sync_only: bool = False, connection_only: bool = False,
              manual_login: bool = False, progress=None, cancel=None, requested_at=None):
     from playwright.sync_api import sync_playwright
+    old_path = cfg.get("attendance_path")
+    cfg = rules.normalize_config(cfg)
+    if old_path != cfg.get("attendance_path"):
+        core.log.info("기존 /home 출퇴근 경로를 /work-schedule/user/register-month로 자동 보정했습니다.")
     if action not in rules.ACTIONS:
         raise ValueError("알 수 없는 출퇴근 동작")
     title = rules.LABELS[action]

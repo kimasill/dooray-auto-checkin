@@ -28,7 +28,7 @@
   "dooray_calendar_selector": "",
   "sync_interval_minutes": 60,
   "tenant_url": "https://YOURCOMPANY.dooray.com",
-  "attendance_path": "/home",
+  "attendance_path": "/work-schedule/user/register-month",
   "random_window_minutes": 10,
   "skip_weekends": true,
   "skip_korean_holidays": true,

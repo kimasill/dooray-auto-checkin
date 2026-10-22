@@ -405,8 +405,9 @@ class App:
         box = self.card(page, "두레이 계정")
         box.pack(fill="x", pady=(0, 14))
         self.field(box, "회사 두레이 주소", "tenant_url")
-        self.label(box, "예: https://회사.dooray.com  ·  /home 등은 아래 페이지 경로에 입력하세요.", color=MUTED, size=9).pack(anchor="w", pady=(0, 5))
+        self.label(box, "예: https://회사.dooray.com  ·  근태 경로는 아래에 입력하세요.", color=MUTED, size=9).pack(anchor="w", pady=(0, 5))
         self.field(box, "출퇴근 페이지 경로", "attendance_path")
+        self.label(box, "기본값: /work-schedule/user/register-month · 기존 /home은 자동 보정됩니다.", color=MUTED, size=9).pack(anchor="w", pady=(0, 5))
         self.field(box, "로그인 ID", "login_id")
         self.password_entry = self.field(box, "비밀번호", "password", secret=True)
         self.password_visible = tk.BooleanVar(value=False)
@@ -553,6 +554,7 @@ class App:
         cfg["date_overrides"] = copy.deepcopy(self.overrides)
         for key, var in self.selector_vars.items():
             cfg["selectors"][key] = var.get().strip() or None
+        cfg = rules.normalize_config(cfg)
         rules.validate_config(cfg)
         return cfg
 
@@ -586,6 +588,8 @@ class App:
         def done(value):
             self.cfg = value
             self.vars["password"].set("")
+            if self.vars["attendance_path"].get().strip() in ("/home", "/home/"):
+                self.vars["attendance_path"].set(value["attendance_path"])
             on = self.task.get("exists") and self.task.get("state") != "Disabled"
             self.feedback.configure(text="설정 저장 완료" if on else "설정 저장 완료 · 자동 예약은 아직 OFF입니다.", fg=ACCENT if on else "#B25545")
             self.cache = core.load_calendar(self.cfg)

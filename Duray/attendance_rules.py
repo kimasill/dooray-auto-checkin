@@ -12,6 +12,7 @@ from functools import lru_cache
 from urllib.parse import urlparse
 
 KST = dt.timezone(dt.timedelta(hours=9))
+ATTENDANCE_PATH = "/work-schedule/user/register-month"
 ACTIONS = ("checkin", "checkout")
 LABELS = {"checkin": "출근", "checkout": "퇴근"}
 DAY_LABELS = {"auto": "자동 판정", "work": "근무일", "holiday": "휴무 / 대체휴일",
@@ -27,7 +28,7 @@ NEW_DEFAULTS = {
     "half_day_policy": "checkout_time", "am_half_checkout_time": "18:00",
     "pm_half_checkout_time": "14:00", "late_grace_minutes": 15,
     "dooray_sync_enabled": False,
-    "dooray_calendar_path": "/work-schedule/user/register-month",
+    "dooray_calendar_path": ATTENDANCE_PATH,
     "dooray_calendar_selector": "", "sync_interval_minutes": 60,
 }
 
@@ -38,6 +39,11 @@ def now_kst() -> dt.datetime:
 
 def normalize_config(raw: dict) -> dict:
     cfg = {**copy.deepcopy(NEW_DEFAULTS), **copy.deepcopy(raw)}
+    # The old default is Dooray's portal, which may have no attendance controls.
+    # Correct it on read for both the GUI and watcher, without changing custom
+    # paths or rewriting an existing config file during a read-only operation.
+    if cfg.get("attendance_path", ATTENDANCE_PATH) in ("/home", "/home/"):
+        cfg["attendance_path"] = ATTENDANCE_PATH
     if cfg["half_day_policy"] in ("skip_action", "skip_day", "custom_time"):
         cfg["half_day_policy"] = "checkout_time"
     if "am_half_checkout_time" not in raw:
@@ -76,7 +82,7 @@ def validate_config(cfg: dict, *, require_account: bool = False) -> None:
     if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.query or parsed.fragment:
         raise ValueError("두레이 주소는 https://로 시작하는 회사 주소를 입력하세요.")
     if parsed.path not in ("", "/"):
-        raise ValueError("회사 두레이 주소에는 https://회사.dooray.com까지만 입력하세요. /home 등은 출퇴근 페이지 경로에 입력하세요.")
+        raise ValueError("회사 두레이 주소에는 https://회사.dooray.com까지만 입력하세요. 근태 경로는 아래 출퇴근 페이지 경로에 입력하세요.")
     if require_account and (not cfg.get("login_id", "").strip() or "YOURCOMPANY" in cfg["tenant_url"]):
         raise ValueError("두레이 주소와 로그인 ID를 먼저 저장하세요.")
     for key in ("attendance_path", "dooray_calendar_path"):
