@@ -2,6 +2,8 @@
 
 Windows에서 Dooray 출퇴근 예약, 근무 달력, 개인 근태를 관리하는 데스크톱 프로그램입니다. 현재 버전은 **2.1.6**입니다.
 
+[프로그램 소개 페이지](https://kimasill.github.io/dooray-auto-checkin/) · [화면과 함께 설치하기](https://kimasill.github.io/dooray-auto-checkin/guide.html) · [프로젝트 소개 글](https://kimasill.github.io/dooray-auto-checkin/story.html)
+
 [Windows 설치 파일 다운로드](https://github.com/kimasill/dooray-auto-checkin/releases/download/v2.1.6/DoorayAutoCheckin-v2.1.6-windows.zip) · [설치 방법](#설치와-업데이트) · [연결 문제 해결](#연결이-안-될-때)
 
 ## 화면 미리보기
