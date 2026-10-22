@@ -6,6 +6,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules') + [IO.Path]::PathSeparator + $env:PSModulePath
 $configPath = Join-Path $DataDir 'config.json'
 $cfg = $null
 $warnings = New-Object 'System.Collections.Generic.List[string]'
@@ -92,6 +93,26 @@ $safeConfig['date_overrides'] = $overrides
 $safeConfig['accountConfigured'] = [bool]($cfg -and $cfg.login_id -and $cfg.tenant_url)
 Save-Json 'schedule-settings.json' $safeConfig
 
+function Get-RouteKind([string]$value) {
+    if (-not $value) { return 'missing' }
+    $path = ($value -split '[?#]', 2)[0].TrimEnd('/')
+    if ($path -eq '') { return 'root' }
+    if ($path -eq '/home') { return 'home' }
+    if ($path -eq '/work-schedule/user/register-month') { return 'calendar' }
+    return 'other'
+}
+$connection = [ordered]@{
+    attendanceRoute = Get-RouteKind ([string]$cfg.attendance_path)
+    calendarRoute = Get-RouteKind ([string]$cfg.dooray_calendar_path)
+    attendanceHasQuery = [bool]([string]$cfg.attendance_path -match '[?#]')
+    calendarHasQuery = [bool]([string]$cfg.dooray_calendar_path -match '[?#]')
+    customSelectors = [ordered]@{}
+}
+foreach ($key in @('login_id','login_password','login_submit','checkin_button','checkout_button')) {
+    $connection.customSelectors[$key] = [bool]($cfg -and $cfg.selectors -and $cfg.selectors.$key)
+}
+Save-Json 'connection-settings.json' $connection
+
 foreach ($name in @('state','calendar','watcher.owner','execution.owner')) {
     $path = Join-Path $DataDir ($name + '.json')
     if (-not (Test-Path -LiteralPath $path)) { continue }
@@ -118,7 +139,7 @@ foreach ($name in @('checkin.log','checkin.log.1','checkin.log.2')) {
     }
 }
 
-$environment = [ordered]@{ collectedAt = (Get-Date).ToString('o'); collectorVersion = 2; dataFound = (Test-Path -LiteralPath $configPath) }
+$environment = [ordered]@{ collectedAt = (Get-Date).ToString('o'); collectorVersion = 3; dataFound = (Test-Path -LiteralPath $configPath) }
 if (-not $SkipSystemInfo) {
     try {
         $os = Get-CimInstance Win32_OperatingSystem

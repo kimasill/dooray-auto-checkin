@@ -10,6 +10,43 @@ from urllib.parse import urlparse
 import dooray_checkin as core
 
 
+def route_kind(value):
+    """Only fixed labels leave the browser; never include URLs, queries or IDs."""
+    path = urlparse(value).path.rstrip("/") or "/"
+    if path in ("/", "/home", "/work-schedule/user/register-month"):
+        return {"/": "root", "/home": "home", "/work-schedule/user/register-month": "calendar"}[path]
+    if re.search(r"/(login|log-in|signin|sign-in)(/|$)", path, re.I):
+        return "login"
+    return "other"
+
+
+def log_page_state(page, cfg, stage, **flags):
+    """Credential-free support evidence. No page text, input values or screenshots."""
+    try:
+        current, tenant = urlparse(page.url), urlparse(cfg["tenant_url"])
+        host = (current.hostname or "").lower()
+        origin = ("tenant" if current.netloc == tenant.netloc else
+                  "dooray" if host == "dooray.com" or host.endswith(".dooray.com") else "external")
+        fields = {
+            "id": core.candidates(cfg, "login_id", core.LOGIN_ID_CANDIDATES),
+            "pw": core.candidates(cfg, "login_password", core.LOGIN_PW_CANDIDATES),
+            "submit": core.candidates(cfg, "login_submit", core.LOGIN_SUBMIT_CANDIDATES),
+            "checkin": core.candidates(cfg, "checkin_button", core.CHECKIN_CANDIDATES),
+            "checkout": core.candidates(cfg, "checkout_button", core.CHECKOUT_CANDIDATES),
+            "logout": ["button:has-text('로그아웃')", "a:has-text('로그아웃')"],
+        }
+        snapshot = {"stage": stage, "origin": origin, "route": route_kind(page.url),
+                    "attendance_route": route_kind(cfg["attendance_path"]),
+                    "calendar_route": route_kind(cfg["dooray_calendar_path"]),
+                    "frames": len(page.frames)}
+        snapshot.update({key: core.find_first(page, selectors)[0] is not None for key, selectors in fields.items()})
+        snapshot.update({key: bool(flags[key]) for key in ("manual", "submitted", "id_submitted") if key in flags})
+        core.log.info("연결 화면 상태: %s", json.dumps(snapshot, ensure_ascii=False, sort_keys=True))
+    except Exception:
+        # A closed or navigating page must not replace the original error.
+        core.log.info("연결 화면 상태: 조회 불가")
+
+
 class ConnectionProblem(RuntimeError):
     def __init__(self, code: str, title: str, help_text: str, *, retryable: bool = False):
         self.code = code
@@ -133,7 +170,7 @@ def authenticated(page, cfg, evidence=None):
     return marker is not None
 
 
-def ensure_logged_in(page, cfg, *, evidence=None, manual=False, progress=None, cancel=None):
+def ensure_logged_in(page, cfg, *, evidence=None, manual=False, progress=None, cancel=None, verification_url=None):
     emit = progress or (lambda message: core.log.info("%s", message))
     deadline = time.monotonic() + (180 if manual else cfg["timeout_ms"] / 1000)
     submitted = False
@@ -141,6 +178,10 @@ def ensure_logged_in(page, cfg, *, evidence=None, manual=False, progress=None, c
     seen_form = False
     last_progress = ""
     reminder_deferred = False
+    verification_url = verification_url or cfg["tenant_url"].rstrip("/") + cfg["attendance_path"]
+    destination_checked = False
+    candidate_url = ""
+    candidate_since = 0.0
     while time.monotonic() < deadline:
         check_cancel(cancel)
         if page.is_closed():
@@ -162,6 +203,36 @@ def ensure_logged_in(page, cfg, *, evidence=None, manual=False, progress=None, c
         pw, _ = core.find_first(page, core.candidates(cfg, "login_password", core.LOGIN_PW_CANDIDATES))
         login, _ = core.find_first(page, core.candidates(cfg, "login_id", core.LOGIN_ID_CANDIDATES))
         seen_form = seen_form or pw is not None or login is not None
+        # Dooray can return to Mail/Project instead of Home after a valid login.
+        # Visiting the configured same-company page is a read-only probe, NOT
+        # proof of login. The next iteration still requires positive evidence.
+        # Never interrupt a password form, OTP, password change or external SSO.
+        current = urlparse(page.url)
+        destination = urlparse(verification_url)
+        can_verify = (not destination_checked and problem is None and pw is None and
+                      current.scheme == destination.scheme == "https" and
+                      current.netloc == destination.netloc == urlparse(cfg["tenant_url"]).netloc and
+                      page.url.rstrip("/") != verification_url.rstrip("/") and
+                      route_kind(page.url) != "login")
+        # An ID-only login form must stay available for the user/next-button flow.
+        specific_id, _ = core.find_first(page, core.candidates(cfg, "login_id",
+            [s for s in core.LOGIN_ID_CANDIDATES if s != "input[type='text']"]))
+        can_verify = can_verify and specific_id is None
+        if can_verify:
+            if candidate_url != page.url:
+                candidate_url, candidate_since = page.url, time.monotonic()
+            elif time.monotonic() - candidate_since >= 0.75:
+                destination_checked = True
+                emit("로그인 후 다른 서비스 화면이 열려 설정된 출퇴근·근태 페이지를 확인합니다.")
+                log_page_state(page, cfg, "verify_destination", manual=manual, submitted=submitted)
+                response = page.goto(verification_url, wait_until="domcontentloaded", timeout=cfg["timeout_ms"])
+                if response and response.status >= 400:
+                    raise ConnectionProblem("ATTENDANCE_PAGE", f"설정된 출퇴근·근태 페이지를 열 수 없습니다 (HTTP {response.status}).",
+                                            "출퇴근 페이지 경로와 회사의 근태 사용 권한을 확인하세요.")
+                deadline = max(deadline, time.monotonic() + cfg["timeout_ms"] / 1000)
+                continue
+        else:
+            candidate_url = ""
         if manual:
             status = "열린 브라우저에서 로그인·추가 인증을 완료하세요. 최대 3분 대기 · 앱에서 취소할 수 있습니다."
         elif not trusted_password_origin(page.url, cfg):
@@ -198,13 +269,20 @@ def ensure_logged_in(page, cfg, *, evidence=None, manual=False, progress=None, c
             status = "로그인 결과를 확인하고 있습니다." if submitted else "두레이 로그인 화면을 기다리고 있습니다."
         if status != last_progress:
             emit(status)
+            log_page_state(page, cfg, "login_progress", manual=manual, submitted=submitted, id_submitted=id_submitted)
             last_progress = status
         page.wait_for_timeout(250)
+    if destination_checked and pw is None:
+        raise ConnectionProblem("ATTENDANCE_PAGE", "출퇴근·근태 페이지에서 로그인 완료를 확인하지 못했습니다.",
+                                "회사 두레이 주소와 출퇴근 페이지 경로를 확인하세요. 메일·프로젝트 경로가 아닌 출퇴근 화면 경로가 필요합니다.")
     if manual:
         raise ConnectionProblem("LOGIN_TIMEOUT", "직접 로그인 대기 시간이 끝났습니다.",
                                 "3분 안에 로그인을 완료하지 못했습니다. 브라우저에서 직접 로그인을 다시 눌러 진행하세요.")
     if seen_form:
+        if not submitted:
+            raise ConnectionProblem("LOGIN_FORM", "로그인 입력 화면에서 다음 단계로 진행하지 못했습니다.",
+                                    "ID·비밀번호가 아직 전송되지 않았습니다. 브라우저에서 직접 로그인으로 입력 화면과 다음 버튼을 확인하세요.")
         raise ConnectionProblem("LOGIN_UNCONFIRMED", "로그인 완료를 확인하지 못했습니다.",
-                                "ID·비밀번호 또는 회사 인증 방식을 확인하세요. 브라우저에서 직접 로그인으로 상세 안내를 확인할 수 있습니다.")
+                                "입력은 전송했지만 성공 여부를 확인하지 못했습니다. 비밀번호 오류로 확정된 것은 아닙니다. 브라우저에서 직접 로그인으로 안내를 확인하세요.")
     raise ConnectionProblem("PAGE_UNCONFIRMED", "로그인 또는 근태 화면을 확인하지 못했습니다.",
                             "회사 두레이 주소와 출퇴근 페이지 경로를 확인하세요. SSO를 사용하면 브라우저에서 직접 로그인을 누르세요.")

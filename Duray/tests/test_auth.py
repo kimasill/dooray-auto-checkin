@@ -50,6 +50,12 @@ class AuthRulesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "페이지 경로"):
             rules.validate_config({**self.cfg, "tenant_url": "https://fixture.dooray.com/home"})
 
+    def test_route_diagnostics_never_include_private_path_or_query(self):
+        self.assertEqual(auth.route_kind('https://private.dooray.com/home?token=secret#private'), 'home')
+        self.assertEqual(auth.route_kind('/work-schedule/user/register-month?member=secret'), 'calendar')
+        self.assertEqual(auth.route_kind('/login?return=secret'), 'login')
+        self.assertEqual(auth.route_kind('/private-person/private-token'), 'other')
+
     def test_login_failure_blocks_background_until_rechecked_or_password_changed(self):
         with tempfile.TemporaryDirectory(dir=OUTPUT) as temp, patch.object(core, "PROFILE_DIR", Path(temp)):
             assert Path(temp).resolve().is_relative_to(OUTPUT.resolve())
@@ -111,11 +117,83 @@ class LoginBrowserTest(unittest.TestCase):
         auth.ensure_logged_in(self.page, self.cfg)
         self.assertEqual(self.page.evaluate("window.submits"), 1)
 
+    def test_login_landing_on_mail_without_visible_logout_opens_attendance(self):
+        visits=[]
+        def route(request):
+            path=request.request.url.split('fixture.dooray.com')[-1]
+            visits.append(path)
+            if path == '/login':
+                body='<input id="loginId"><input type="password"><button type="submit" onclick="location.href=\'/mail\'">로그인</button>'
+            elif path == '/home':
+                body=SUCCESS
+            else:
+                body='<main><h1>메일</h1><input type="text" placeholder="검색"></main>'
+            request.fulfill(body='<meta charset="utf-8">'+body,content_type='text/html')
+        self.ctx.route('**/*',route)
+        self.page.goto('https://fixture.dooray.com/login')
+        auth.ensure_logged_in(self.page,self.cfg)
+        self.assertEqual(self.page.url,'https://fixture.dooray.com/home')
+        self.assertEqual(visits.count('/home'),1)
+        self.pw_mock.assert_called_once()
+
+    def test_manual_logged_in_project_page_recovers_without_typing_or_clicking(self):
+        visits=[]
+        self.ctx.route('**/*',lambda r: (visits.append(r.request.url),r.fulfill(content_type='text/html; charset=utf-8',
+            body=SUCCESS if r.request.url.endswith('/home') else '<h1>Project</h1><input type="text">')))
+        self.page.goto('https://fixture.dooray.com/project')
+        cancel=threading.Event()
+        timer=threading.Timer(8,cancel.set); timer.start()
+        try:
+            auth.ensure_logged_in(self.page,self.cfg,manual=True,cancel=cancel)
+        finally:
+            timer.cancel()
+        self.assertEqual(self.page.url,'https://fixture.dooray.com/home')
+        self.assertEqual(len(visits),2)
+        self.pw_mock.assert_not_called()
+
+    def test_destination_probe_is_not_login_proof_and_does_not_loop(self):
+        self.cfg['timeout_ms']=1100
+        requests=[]
+        self.ctx.route('**/*',lambda r:(requests.append(r.request.url),r.fulfill(body='Loading',content_type='text/html')))
+        self.page.goto('https://fixture.dooray.com/project')
+        with self.assertRaisesRegex(auth.ConnectionProblem,'ATTENDANCE_PAGE'):
+            auth.ensure_logged_in(self.page,self.cfg)
+        self.assertEqual(len(requests),2)
+        self.pw_mock.assert_not_called()
+
+    def test_manual_otp_screen_is_not_interrupted_by_destination_probe(self):
+        self.load('<p>인증번호를 입력하세요</p><input autocomplete="one-time-code">',
+                  f'setTimeout(()=>document.body.innerHTML={SUCCESS!r}, 1300)',
+                  url='https://fixture.dooray.com/security')
+        auth.ensure_logged_in(self.page,self.cfg,manual=True)
+        self.assertEqual(self.page.url,'https://fixture.dooray.com/security')
+        self.pw_mock.assert_not_called()
+
     def test_id_first_then_password(self):
         self.load("<input id='loginId'><button onclick=\"document.body.innerHTML=window.second\">다음</button>",
                   f"window.second={FORM.replace('<input id=\"loginId\">', '')!r}")
         auth.ensure_logged_in(self.page, self.cfg)
         self.assertEqual(self.page.evaluate("window.submits"), 1)
+
+    def test_unsubmitted_form_does_not_blame_credentials(self):
+        self.load('<input id="loginId"><button>도움말</button>')
+        with self.assertRaisesRegex(auth.ConnectionProblem, '아직 전송되지 않았습니다') as error:
+            auth.ensure_logged_in(self.page, self.cfg)
+        self.assertEqual(error.exception.code, 'LOGIN_FORM')
+        self.pw_mock.assert_not_called()
+
+    def test_page_state_is_only_structure_without_account_or_page_contents(self):
+        self.load(FORM + '<div>PRIVATE-PAGE-BODY</div>', url='https://fixture.dooray.com/login?token=PRIVATE-TOKEN')
+        self.page.locator('#loginId').fill('PRIVATE-LOGIN')
+        self.page.locator('#password').fill('PRIVATE-PASSWORD')
+        with self.assertLogs(core.log, level='INFO') as logs:
+            auth.log_page_state(self.page, self.cfg, 'connection_failed', submitted=True)
+        text='\n'.join(logs.output)
+        self.assertIn('"route": "login"',text)
+        self.assertIn('"pw": true',text)
+        self.assertIn('"submitted": true',text)
+        for secret in ('PRIVATE-', 'fixture.dooray.com', '?token=', 'loginId', '#password'):
+            self.assertNotIn(secret,text)
 
     def test_wrong_password_is_specific_and_submitted_only_once(self):
         self.load(FORM, "window.result='아이디 또는 비밀번호가 올바르지 않습니다.'")
@@ -197,9 +275,18 @@ class ConnectionBrowserTest(unittest.TestCase):
                 patch.object(core, "CALENDAR_PATH", Path(temp) / "calendar.json"), \
                 patch.object(BrowserType, "launch_persistent_context", fixture):
             assert Path(temp).resolve().is_relative_to(OUTPUT.resolve())
-            result = runtime.run_once(cfg, dry_run=True, headed=False, inspect=False, connection_only=True)
+            progress=[]
+            with self.assertLogs(core.log, level='INFO') as logs:
+                result = runtime.run_once(cfg, dry_run=True, headed=False, inspect=False, connection_only=True,
+                                          progress=progress.append)
         self.assertTrue(result["ok"])
         self.assertEqual(mutations, [])
+        self.assertTrue(progress)
+        recorded='\n'.join(logs.output)
+        for message in progress:
+            self.assertIn(message, recorded)
+        self.assertIn('두레이 첫 응답: HTTP 200',recorded)
+        self.assertIn('출퇴근 경로=home',recorded)
 
 
 if __name__ == "__main__":

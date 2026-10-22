@@ -98,7 +98,14 @@ def run_once(cfg: dict, *, dry_run: bool, headed: bool, inspect: bool,
     if not connection_only and not inspect_login:
         auth.check_blocked(cfg)
     profile.mkdir(parents=True, exist_ok=True)
-    emit = progress or (lambda message: core.log.info("%s", message))
+    def emit(message):
+        # UI callbacks must not replace the persistent support log.
+        core.log.info("%s", message)
+        if progress:
+            progress(message)
+    core.log.info("두레이 접속 시작: 방식=%s / 출퇴근 경로=%s / 근태 경로=%s",
+                  "직접 로그인" if manual_login else "자동 로그인", auth.route_kind(cfg["attendance_path"]),
+                  auth.route_kind(cfg["dooray_calendar_path"]))
     started_at = requested_at or rules.now_kst()
     started_day = started_at.date()
     with sync_playwright() as pw:
@@ -117,6 +124,7 @@ def run_once(cfg: dict, *, dry_run: bool, headed: bool, inspect: bool,
         try:
             emit("회사 두레이 주소에 접속하고 있습니다.")
             response = page.goto(url, wait_until="domcontentloaded", timeout=cfg["timeout_ms"])
+            core.log.info("두레이 첫 응답: HTTP %s", response.status if response else "없음")
             if response and response.status >= 400:
                 raise auth.ConnectionProblem("HTTP", f"두레이 페이지 접속 오류 (HTTP {response.status}).",
                                              "회사 주소·페이지 경로와 접속 권한을 확인하세요. 서버 장애이면 잠시 후 다시 시도하세요.",
@@ -135,11 +143,12 @@ def run_once(cfg: dict, *, dry_run: bool, headed: bool, inspect: bool,
                         pass
                 return False
             core.ensure_logged_in(page, cfg, evidence=evidence, manual=manual_login,
-                                  progress=emit, cancel=cancel)
+                                  progress=emit, cancel=cancel, verification_url=url)
             login_verified = True
             auth.clear_failure(cfg)
             auth.check_cancel(cancel)
             if page.url.rstrip("/") != url.rstrip("/"):
+                emit("로그인 후 설정된 출퇴근·근태 경로로 이동합니다.")
                 page.goto(url, wait_until="domcontentloaded", timeout=cfg["timeout_ms"])
             page.wait_for_timeout(1500)
             if sync_only:
@@ -230,6 +239,7 @@ def run_once(cfg: dict, *, dry_run: bool, headed: bool, inspect: bool,
             raise RuntimeError(f"{title} 클릭 후 기록된 시각을 확인하지 못했습니다. 로그와 스크린샷을 확인하세요.")
         except Exception as exc:
             problem = auth.translate_error(exc)
+            auth.log_page_state(page, cfg, "connection_failed", manual=manual_login)
             if not login_verified and not isinstance(problem, auth.ConnectionProblem):
                 problem = auth.ConnectionProblem("LOGIN_SCREEN", "로그인 화면을 처리하지 못했습니다.",
                                                  "페이지가 바뀌었거나 입력란을 사용할 수 없습니다. 브라우저에서 직접 로그인을 실행하세요.")
