@@ -490,9 +490,17 @@ class SchedulerTest(unittest.TestCase):
     def test_registered_but_not_started_is_failure(self):
         with patch.object(scheduler, '_run_powershell', return_value=(0, 'OK', '')), \
                 patch.object(scheduler, 'watcher_running', return_value=False), \
-                patch.object(scheduler.time, 'monotonic', side_effect=[0, 26]):
+                patch.object(scheduler.time, 'monotonic', side_effect=[0, 61]):
             with self.assertRaisesRegex(RuntimeError, '시작되지 않았습니다'):
                 scheduler.enable()
+
+    def test_slow_cold_start_gets_time_and_normal_task_priority(self):
+        with patch.object(scheduler, '_run_powershell', return_value=(0, 'OK', '')) as command, \
+                patch.object(scheduler, 'watcher_running', side_effect=[False, False, True]), \
+                patch.object(scheduler.time, 'monotonic', side_effect=[0, 26, 40]), \
+                patch.object(scheduler.time, 'sleep'):
+            scheduler.enable()
+        self.assertIn('-Priority 4 ', command.call_args.args[0])
 
 
 if __name__ == "__main__":

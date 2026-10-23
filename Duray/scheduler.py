@@ -148,7 +148,7 @@ $daily = New-ScheduledTaskTrigger -Daily -At '00:00'
 $repeat = New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 1)
 $daily.Repetition = $repeat.Repetition
 $logon = New-ScheduledTaskTrigger -AtLogOn -User {_ps_quote(user)}
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+$settings = New-ScheduledTaskSettingsSet -Priority 4 -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 $principal = New-ScheduledTaskPrincipal -UserId {_ps_quote(user)} -LogonType Interactive -RunLevel Limited
 $old = Get-ScheduledTask -TaskName {_ps_quote(TASK_NAME)} -ErrorAction SilentlyContinue
 if ($old) {{ Stop-ScheduledTask -TaskName {_ps_quote(TASK_NAME)} }}
@@ -159,7 +159,10 @@ Start-ScheduledTask -TaskName {_ps_quote(TASK_NAME)}
     rc, out, err = _run_powershell(script)
     if rc != 0 or "OK" not in out:
         raise RuntimeError(f"예약 등록 실패: {err or out or f'rc={rc}'}")
-    deadline = time.monotonic() + 25
+    # Default Task Scheduler priority 7 also lowers I/O priority, making onefile
+    # extraction and browser startup crawl under load. Use normal priority 4
+    # and allow a bounded cold start before declaring the watcher unavailable.
+    deadline = time.monotonic() + 60
     while not watcher_running():
         if time.monotonic() >= deadline:
             raise RuntimeError("Windows 예약은 등록됐지만 감시 프로그램이 시작되지 않았습니다. 실행 기록을 확인하고 예약 다시 시작을 누르세요.")
