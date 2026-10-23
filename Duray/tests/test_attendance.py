@@ -401,6 +401,29 @@ class RuntimeTest(unittest.TestCase):
             self.assertEqual(runtime.do_run(self.cfg, self.args), 0)
             wait.assert_called_once_with(1)
 
+    def test_unconfirmed_login_retries_then_records_only_one_success(self):
+        self.cfg.update(retry_count=3, retry_delay_seconds=1)
+        failure = runtime.auth.ConnectionProblem('LOGIN_UNCONFIRMED', 'timeout', 'retry', retryable=True)
+        with patch.object(core, 'chromium_ready', return_value=True), \
+                patch.object(runtime, 'run_once', side_effect=[failure, '출근 체크 성공']) as browser, \
+                patch.object(runtime.time, 'sleep') as wait:
+            self.assertEqual(runtime.do_run(self.cfg, self.args), 0)
+            self.assertEqual(runtime.do_run(self.cfg, self.args), 0)
+            self.assertEqual(browser.call_count, 2)
+            wait.assert_called_once_with(1)
+        self.assertEqual(len(core.load_state()['history']), 1)
+
+    def test_unconfirmed_retries_are_bounded_and_confirmed_credentials_stop(self):
+        self.cfg.update(retry_count=3, retry_delay_seconds=1)
+        for code, retryable, count in [('LOGIN_UNCONFIRMED', True, 3), ('CREDENTIALS', False, 1)]:
+            with self.subTest(code=code), patch.object(core, 'chromium_ready', return_value=True), \
+                    patch.object(runtime, 'run_once', side_effect=runtime.auth.ConnectionProblem(code, 'failed', 'help', retryable=retryable)) as browser, \
+                    patch.object(runtime.time, 'sleep') as wait:
+                self.assertEqual(runtime.do_run(self.cfg, self.args), 1)
+                self.assertEqual(browser.call_count, count)
+                self.assertEqual(wait.call_count, count - 1)
+                self.assertFalse(core.load_state().get('history'))
+
     def test_waiting_second_request_rechecks_duplicate_before_click(self):
         import threading
         import time

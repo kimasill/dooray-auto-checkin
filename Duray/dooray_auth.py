@@ -66,6 +66,12 @@ def check_blocked(cfg):
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
+    # Older releases persisted an ambiguous timeout as a permanent account
+    # failure. It is not evidence of bad credentials and must be recoverable.
+    if value.get("code") == "LOGIN_UNCONFIRMED":
+        path.unlink(missing_ok=True)
+        core.log.info("이전 로그인 확인 시간 초과의 영구 차단을 해제했습니다. 정상 연결을 다시 확인합니다.")
+        return
     # 2.1.1 misclassified Dooray's optional 90-day reminder as forced expiry.
     # Recheck those old records once; genuine expiry is saved with version 2.
     if value.get("code") == "PASSWORD_EXPIRED" and value.get("version", 1) < 2:
@@ -76,7 +82,7 @@ def check_blocked(cfg):
 
 def remember_failure(cfg, exc):
     if isinstance(exc, ConnectionProblem) and exc.code in {
-            "CREDENTIALS", "ACCOUNT_LOCKED", "PASSWORD_EXPIRED", "EXTRA_AUTH", "PASSWORD_MISSING", "LOGIN_UNCONFIRMED"}:
+            "CREDENTIALS", "ACCOUNT_LOCKED", "PASSWORD_EXPIRED", "EXTRA_AUTH", "PASSWORD_MISSING"}:
         core.atomic_json(profile_path(cfg) / "connection-block.json",
                          {"version": 2, "code": exc.code, "message": str(exc)})
 
@@ -182,6 +188,7 @@ def ensure_logged_in(page, cfg, *, evidence=None, manual=False, progress=None, c
     destination_checked = False
     candidate_url = ""
     candidate_since = 0.0
+    pw = None
     while time.monotonic() < deadline:
         check_cancel(cancel)
         if page.is_closed():
@@ -257,6 +264,9 @@ def ensure_logged_in(page, cfg, *, evidence=None, manual=False, progress=None, c
             else:
                 pw.press("Enter")
             submitted = True
+            # Filling/submitting the form can be slow on a busy PC. Allow the
+            # configured response window after submission, not just before it.
+            deadline = max(deadline, time.monotonic() + cfg["timeout_ms"] / 1000)
             status = "ID·비밀번호 전송 완료 · 로그인 결과를 확인하고 있습니다."
         elif login is not None and pw is None and not id_submitted and not submitted:
             next_button, _ = core.find_first(page, ["button:has-text('다음')", "button:has-text('계속')", "button:has-text('Next')"])
@@ -264,6 +274,7 @@ def ensure_logged_in(page, cfg, *, evidence=None, manual=False, progress=None, c
                 login.fill(cfg["login_id"])
                 next_button.click()
                 id_submitted = True
+                deadline = max(deadline, time.monotonic() + cfg["timeout_ms"] / 1000)
             status = "로그인 화면을 확인하고 있습니다."
         else:
             status = "로그인 결과를 확인하고 있습니다." if submitted else "두레이 로그인 화면을 기다리고 있습니다."
@@ -272,6 +283,15 @@ def ensure_logged_in(page, cfg, *, evidence=None, manual=False, progress=None, c
             log_page_state(page, cfg, "login_progress", manual=manual, submitted=submitted, id_submitted=id_submitted)
             last_progress = status
         page.wait_for_timeout(250)
+    # Rendering, browser IPC or diagnostic logging can cross the deadline
+    # after login has already succeeded. Inspect the final state before failing.
+    check_cancel(cancel)
+    if authenticated(page, cfg, evidence):
+        emit("로그인 확인 완료 · 출퇴근 기록은 변경하지 않습니다.")
+        return
+    problem = visible_problem(page)
+    if problem and not manual:
+        raise problem
     if destination_checked and pw is None:
         raise ConnectionProblem("ATTENDANCE_PAGE", "출퇴근·근태 페이지에서 로그인 완료를 확인하지 못했습니다.",
                                 "회사 두레이 주소와 출퇴근 페이지 경로를 확인하세요. 메일·프로젝트 경로가 아닌 출퇴근 화면 경로가 필요합니다.")
@@ -283,6 +303,6 @@ def ensure_logged_in(page, cfg, *, evidence=None, manual=False, progress=None, c
             raise ConnectionProblem("LOGIN_FORM", "로그인 입력 화면에서 다음 단계로 진행하지 못했습니다.",
                                     "ID·비밀번호가 아직 전송되지 않았습니다. 브라우저에서 직접 로그인으로 입력 화면과 다음 버튼을 확인하세요.")
         raise ConnectionProblem("LOGIN_UNCONFIRMED", "로그인 완료를 확인하지 못했습니다.",
-                                "입력은 전송했지만 성공 여부를 확인하지 못했습니다. 비밀번호 오류로 확정된 것은 아닙니다. 브라우저에서 직접 로그인으로 안내를 확인하세요.")
+                                "입력은 전송했지만 성공 여부를 확인하지 못했습니다. 자동 예약은 설정된 재시도 횟수와 간격으로 다시 확인합니다. 계속 실패하면 브라우저에서 직접 로그인으로 안내를 확인하세요.", retryable=True)
     raise ConnectionProblem("PAGE_UNCONFIRMED", "로그인 또는 근태 화면을 확인하지 못했습니다.",
                             "회사 두레이 주소와 출퇴근 페이지 경로를 확인하세요. SSO를 사용하면 브라우저에서 직접 로그인을 누르세요.")

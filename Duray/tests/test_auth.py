@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -77,6 +78,25 @@ class AuthRulesTest(unittest.TestCase):
             with self.assertRaisesRegex(auth.ConnectionProblem, "PASSWORD_EXPIRED"):
                 auth.check_blocked(self.cfg)
 
+    def test_legacy_unconfirmed_block_recovers_but_confirmed_errors_remain_blocked(self):
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temp, patch.object(core, 'PROFILE_DIR', Path(temp)):
+            path = auth.profile_path(self.cfg) / 'connection-block.json'
+            core.atomic_json(path, {'version': 2, 'code': 'LOGIN_UNCONFIRMED', 'message': 'old timeout'})
+            auth.check_blocked(self.cfg)
+            self.assertFalse(path.exists())
+            for code in ('CREDENTIALS', 'ACCOUNT_LOCKED', 'PASSWORD_EXPIRED', 'EXTRA_AUTH', 'PASSWORD_MISSING'):
+                auth.remember_failure(self.cfg, auth.ConnectionProblem(code, 'confirmed', 'fix account'))
+                with self.assertRaises(auth.ConnectionProblem) as error:
+                    auth.check_blocked(self.cfg)
+                self.assertEqual(error.exception.code, code)
+                auth.clear_failure(self.cfg)
+
+    def test_unconfirmed_failure_is_not_persisted_as_permanent_block(self):
+        with tempfile.TemporaryDirectory(dir=OUTPUT) as temp, patch.object(core, 'PROFILE_DIR', Path(temp)):
+            auth.remember_failure(self.cfg, auth.ConnectionProblem('LOGIN_UNCONFIRMED', 'timeout', 'retry'))
+            self.assertFalse((auth.profile_path(self.cfg) / 'connection-block.json').exists())
+            auth.check_blocked(self.cfg)
+
 
 @unittest.skipUnless(BROWSER and Path(BROWSER).is_file(), "Set DOORAY_TEST_BROWSER")
 class LoginBrowserTest(unittest.TestCase):
@@ -111,6 +131,38 @@ class LoginBrowserTest(unittest.TestCase):
         self.assertEqual(self.page.evaluate("window.submits"), 1)
         self.assertEqual(self.page.evaluate("window.mutations"), 0)
         self.pw_mock.assert_called_once()
+
+    def test_completed_login_is_rechecked_when_diagnostics_cross_deadline(self):
+        self.load(FORM)
+        clock = [0.0]
+        def slow_diagnostic(*args, **kwargs):
+            clock[0] = 100.0
+        with patch.object(auth, 'time', types.SimpleNamespace(monotonic=lambda: clock[0])), \
+                patch.object(auth, 'log_page_state', side_effect=slow_diagnostic):
+            auth.ensure_logged_in(self.page, self.cfg)
+        self.assertEqual(self.page.evaluate('window.submits'), 1)
+        self.assertEqual(self.page.evaluate('window.mutations'), 0)
+
+    def test_unconfirmed_timeout_is_retryable_without_reporting_success(self):
+        self.load(FORM, "window.result='Loading'")
+        clock = [0.0]
+        with patch.object(auth, 'time', types.SimpleNamespace(monotonic=lambda: clock[0])), \
+                patch.object(auth, 'log_page_state', side_effect=lambda *a, **k: clock.__setitem__(0, 100.0)):
+            with self.assertRaises(auth.ConnectionProblem) as error:
+                auth.ensure_logged_in(self.page, self.cfg)
+        self.assertEqual(error.exception.code, 'LOGIN_UNCONFIRMED')
+        self.assertTrue(error.exception.retryable)
+        self.assertEqual(self.page.evaluate('window.submits'), 1)
+
+    def test_confirmed_password_error_at_deadline_still_stops_retry(self):
+        self.load(FORM, "window.result='아이디 또는 비밀번호가 올바르지 않습니다.'")
+        clock = [0.0]
+        with patch.object(auth, 'time', types.SimpleNamespace(monotonic=lambda: clock[0])), \
+                patch.object(auth, 'log_page_state', side_effect=lambda *a, **k: clock.__setitem__(0, 100.0)):
+            with self.assertRaises(auth.ConnectionProblem) as error:
+                auth.ensure_logged_in(self.page, self.cfg)
+        self.assertEqual(error.exception.code, 'CREDENTIALS')
+        self.assertFalse(error.exception.retryable)
 
     def test_visible_duplicate_input_after_hidden_field(self):
         self.load('<input type="password" style="display:none">' + FORM)

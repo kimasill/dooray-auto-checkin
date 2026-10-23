@@ -1,10 +1,10 @@
 # 두레이 자동 출퇴근
 
-Windows에서 Dooray 출퇴근 예약, 근무 달력, 개인 근태를 관리하는 데스크톱 프로그램입니다. 현재 버전은 **2.1.8**입니다.
+Windows에서 Dooray 출퇴근 예약, 근무 달력, 개인 근태를 관리하는 데스크톱 프로그램입니다. 현재 버전은 **2.1.9**입니다.
 
 [프로그램 소개 페이지](https://kimasill.github.io/dooray-auto-checkin/) · [화면과 함께 설치하기](https://kimasill.github.io/dooray-auto-checkin/guide.html) · [프로젝트 소개 글](https://kimasill.github.io/dooray-auto-checkin/story.html)
 
-[Windows 설치 파일 다운로드](https://github.com/kimasill/dooray-auto-checkin/releases/download/v2.1.8/DoorayAutoCheckin-v2.1.8-windows.zip) · [설치 방법](#설치와-업데이트) · [연결 문제 해결](#연결이-안-될-때)
+[Windows 설치 파일 다운로드](https://github.com/kimasill/dooray-auto-checkin/releases/download/v2.1.9/DoorayAutoCheckin-v2.1.9-windows.zip) · [설치 방법](#설치와-업데이트) · [연결 문제 해결](#연결이-안-될-때)
 
 ## 화면 미리보기
 
@@ -28,7 +28,7 @@ Windows에서 Dooray 출퇴근 예약, 근무 달력, 개인 근태를 관리하
 
 **시간 설정만 저장하면 자동 예약은 시작되지 않습니다.** 하단의 **저장하고 자동 예약 시작**을 누르고 상단에 **자동 예약 실행 중**이 표시되는지 확인하세요. Windows 작업 등록과 실제 감시 프로세스 실행을 모두 확인합니다. 고정 시각에서는 랜덤 입력을 잠그며, 랜덤 범위를 선택하면 적용되는 시간 범위를 보여줍니다. 예: 09:55, 앞뒤 5분 → **09:50:00~10:00:00**에서 1초 단위로 하루 한 시각을 선택하며 대시보드에 오늘의 선택 시각을 초까지 표시합니다. 2.1.6부터 범위도 **5분 30초 전 ~ 2분 15초 후**처럼 설정할 수 있습니다. 이 경우 09:55 기준 범위는 **09:49:30~09:57:15**입니다. 선택 시각에 처리를 시작하므로 접속·로그인·네트워크에 따라 실제 두레이 기록은 늦어질 수 있습니다.
 
-1. [최신 릴리스](https://github.com/kimasill/dooray-auto-checkin/releases/latest)에서 `DoorayAutoCheckin-v2.1.8-windows.zip`을 받습니다.
+1. [최신 릴리스](https://github.com/kimasill/dooray-auto-checkin/releases/latest)에서 `DoorayAutoCheckin-v2.1.9-windows.zip`을 받습니다.
 2. 압축을 풀고 `설치.bat`을 실행합니다.
 3. 프로그램의 **연결 · 설정**에서 회사 두레이 주소, 로그인 ID와 비밀번호를 입력하고 **저장하고 연결 확인**을 누릅니다.
 4. **시간 · 예약**에서 출근·퇴근 시각을 설정하고, 대시보드에서 **자동 예약 켜기**를 누릅니다.
@@ -55,11 +55,13 @@ Windows에서 Dooray 출퇴근 예약, 근무 달력, 개인 근태를 관리하
 | `ADDRESS` / `NETWORK` | 회사 주소, 인터넷·VPN·프록시 |
 | `CERTIFICATE` | PC 날짜·시간, 회사 보안 인증서 |
 | `LOGIN_FORM` | ID·비밀번호가 전송되기 전 입력 화면 확인 필요. 직접 로그인으로 진행 |
-| `LOGIN_UNCONFIRMED` | 입력은 전송했으나 성공 확인이 안 된 상태. 비밀번호 오류로 확정된 것은 아님 |
+| `LOGIN_UNCONFIRMED` | 일시적인 성공 확인 실패. 자동 예약은 설정된 횟수·간격으로 재시도하며 영구 차단하지 않음 |
 | `PAGE_UNCONFIRMED` / `ATTENDANCE_PAGE` / `HTTP` | 회사 주소·출퇴근 페이지 경로·접속 권한 |
 | `BROWSER` | 연결 · 설정 아래의 Chromium 설치 |
 
-**웹 로그인은 됐지만 앱이 계속 기다릴 때:** 2.1.8로 업데이트한 뒤 **저장하고 연결 확인**을 한 번 실행하세요. 기존 `/home`·`/home/` 설정은 실제 근태 경로 `/work-schedule/user/register-month`로 자동 보정됩니다. 다른 사용자 지정 경로와 계정·시간·예약 설정은 유지합니다. 로그인 뒤 메일·프로젝트로 이동한 경우에도 근태 페이지로 이동해 확인합니다. `브라우저에서 직접 로그인`은 열린 창에 사용자가 ID·비밀번호를 직접 입력하는 기능입니다.
+**웹 로그인은 됐지만 앱이 계속 기다릴 때:** 2.1.9로 업데이트한 뒤 **저장하고 연결 확인**을 한 번 실행하세요. 기존 `/home`·`/home/` 설정은 실제 근태 경로 `/work-schedule/user/register-month`로 자동 보정됩니다. 다른 사용자 지정 경로와 계정·시간·예약 설정은 유지합니다. 로그인 뒤 메일·프로젝트로 이동한 경우에도 근태 페이지로 이동해 확인합니다. `브라우저에서 직접 로그인`은 열린 창에 사용자가 ID·비밀번호를 직접 입력하는 기능입니다.
+
+2.1.9부터 로그인 시간 제한이 끝났더라도 실제 로그인 완료 상태를 마지막으로 다시 확인합니다. 이전 버전이 저장한 `LOGIN_UNCONFIRMED` 영구 차단은 다음 자동 접속 시 해제하며, 재시도는 설정된 횟수·간격과 기존 예약 유효 범위 안에서 진행합니다. 이미 놓친 과거 출퇴근 기록을 소급 생성하지 않습니다.
 
 비밀번호 오류·잠금·추가 인증 등이 확인되면 반복 로그인을 중지합니다. 설정을 수정한 후 **저장하고 연결 확인** 또는 **브라우저에서 직접 로그인**으로 다시 확인하세요. 2.1.1부터 계정별 세션을 분리하므로 업데이트 후 처음 연결할 때 다시 로그인할 수 있습니다. 저장된 계정·비밀번호·시간 설정은 유지됩니다.
 
@@ -88,7 +90,7 @@ Windows에서 Dooray 출퇴근 예약, 근무 달력, 개인 근태를 관리하
 
 ## 다른 PC에서 예약이 실행되지 않았을 때
 
-실패한 **그 PC에서, 앱을 사용한 Windows 계정으로** [진단 도구 ZIP](https://github.com/kimasill/dooray-auto-checkin/releases/download/v2.1.8/Dooray-diagnostics-tool.zip)을 내려받아 압축을 풀고 **진단로그수집.bat**을 실행하세요. 바탕화면에 생성되는 `Dooray-diagnostics-날짜-시간-식별자.zip`을 분석 담당자에게 전달하면 됩니다. 실패한 날짜와 기대한 예약 시각도 함께 알려주세요.
+실패한 **그 PC에서, 앱을 사용한 Windows 계정으로** [진단 도구 ZIP](https://github.com/kimasill/dooray-auto-checkin/releases/download/v2.1.9/Dooray-diagnostics-tool.zip)을 내려받아 압축을 풀고 **진단로그수집.bat**을 실행하세요. 바탕화면에 생성되는 `Dooray-diagnostics-날짜-시간-식별자.zip`을 분석 담당자에게 전달하면 됩니다. 실패한 날짜와 기대한 예약 시각도 함께 알려주세요.
 
 예약 설정, 최근 실행 로그, 결과 상태, 앱 버전, Windows 작업 상태와 절전·부팅 이벤트를 모읍니다. 비밀번호 저장소·로그인 세션·스크린샷·원본 설정 파일은 수집하지 않으며 계정 ID·회사 URL과 날짜별 메모를 제외합니다. 출퇴근 처리, 설정 변경, 자동 전송은 하지 않습니다. 일부 Windows 이벤트를 읽을 수 없어도 나머지 로그는 수집됩니다.
 
